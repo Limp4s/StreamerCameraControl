@@ -1,0 +1,120 @@
+{
+  "camera_index": 0,
+  "gesture_hold_seconds": 0.8,
+  "cooldown_seconds": 2.0,
+  "night_vision": true,
+  "gamma": 2.0,
+  "brightness": 20,
+  "contrast": 1.2,
+  "gestures": {
+    "PEACE": {
+      "enabled": true,
+      "action": "none",
+      "target": ""
+    }
+  },
+  "camera_resolution": "1280x720",
+  "face_presence_gate": false,
+  "bindings": {
+    "LEFT:THUMB_UP": {
+      "action": "none",
+      "target": ""
+    },
+    "LEFT:PINKY": {
+      "action": "none",
+      "target": ""
+    },
+    "LEFT:ONE": {
+      "action": "none",
+      "target": ""
+    },
+    "LEFT:PEACE": {
+      "action": "none",
+      "target": ""
+    },
+    "LEFT:THREE": {
+      "action": "none",
+      "target": ""
+    },
+    "LEFT:FOUR": {
+      "action": "none",
+      "target": ""
+    },
+    "LEFT:OPEN_PALM": {
+      "action": "none",
+      "target": ""
+    },
+    "LEFT:FIST": {
+      "action": "none",
+      "target": ""
+    },
+    "RIGHT:THUMB_UP": {
+      "action": "none",
+      "target": ""
+    },
+    "RIGHT:PINKY": {
+      "action": "none",
+      "target": ""
+    },
+    "RIGHT:ONE": {
+      "action": "none",
+      "target": ""
+    },
+    "RIGHT:PEACE": {
+      "action": "none",
+      "target": ""
+    },
+    "RIGHT:THREE": {
+      "action": "none",
+      "target": ""
+    },
+    "RIGHT:FOUR": {
+      "action": "none",
+      "target": ""
+    },
+    "RIGHT:OPEN_PALM": {
+      "action": "none",
+      "target": ""
+    },
+    "RIGHT:FIST": {
+      "action": "none",
+      "target": ""
+    },
+    "BOTH:THUMB_UP": {
+      "action": "none",
+      "target": ""
+    },
+    "BOTH:PINKY": {
+      "action": "none",
+      "target": ""
+    },
+    "BOTH:ONE": {
+      "action": "none",
+      "target": ""
+    },
+    "BOTH:PEACE": {
+      "action": "none",
+      "target": ""
+    },
+    "BOTH:THREE": {
+      "action": "none",
+      "target": ""
+    },
+    "BOTH:FOUR": {
+      "action": "none",
+      "target": ""
+    },
+    "BOTH:OPEN_PALM": {
+      "action": "none",
+      "target": ""
+    },
+    "BOTH:FIST": {
+      "action": "none",
+      "target": ""
+    }
+  },
+  "language": "uk",
+  "face_tracking_enabled": true,
+  "inference_width": 640,
+  "scripts": []
+}
