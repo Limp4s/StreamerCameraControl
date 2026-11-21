@@ -6,7 +6,7 @@ Windows application for gesture-based control with camera preview, MediaPipe han
 
 1. Extract this ZIP to a normal folder (not inside a protected system folder).
 2. Run `INSTALL.bat` to install Python dependencies if needed.
-3. Run `START.bat`.
+3. Run `START.bat` or `START.vbs`.
 
 The application needs a webcam. Face detector model is downloaded on first use when face detection is enabled and an internet connection is available.
 
