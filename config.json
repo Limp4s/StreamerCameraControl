@@ -2,7 +2,7 @@
   "camera_index": 0,
   "gesture_hold_seconds": 0.8,
   "cooldown_seconds": 2.0,
-  "night_vision": true,
+  "night_vision": false,
   "gamma": 2.0,
   "brightness": 20,
   "contrast": 1.2,
@@ -14,107 +14,141 @@
     }
   },
   "camera_resolution": "1280x720",
-  "face_presence_gate": false,
+  "face_presence_gate": true,
   "bindings": {
     "LEFT:THUMB_UP": {
       "action": "none",
-      "target": ""
+      "target": "",
+      "hold_seconds": 0.35
     },
     "LEFT:PINKY": {
       "action": "none",
-      "target": ""
+      "target": "",
+      "hold_seconds": 0.35
     },
     "LEFT:ONE": {
       "action": "none",
-      "target": ""
+      "target": "",
+      "hold_seconds": 0.35
     },
     "LEFT:PEACE": {
       "action": "none",
-      "target": ""
+      "target": "",
+      "hold_seconds": 1.3
     },
     "LEFT:THREE": {
       "action": "none",
-      "target": ""
+      "target": "99",
+      "hold_seconds": 1.3
     },
     "LEFT:FOUR": {
       "action": "none",
-      "target": ""
+      "target": "",
+      "hold_seconds": 1.1
     },
     "LEFT:OPEN_PALM": {
       "action": "none",
-      "target": ""
+      "target": "",
+      "hold_seconds": 0.35
     },
     "LEFT:FIST": {
       "action": "none",
-      "target": ""
+      "target": "",
+      "hold_seconds": 0.35
     },
     "RIGHT:THUMB_UP": {
       "action": "none",
-      "target": ""
+      "target": "",
+      "hold_seconds": 0.3
     },
     "RIGHT:PINKY": {
       "action": "none",
-      "target": ""
+      "target": "",
+      "hold_seconds": 0.35
     },
     "RIGHT:ONE": {
-      "action": "none",
-      "target": ""
+      "action": "script",
+      "target": "C:\\Users\\user\\Desktop\\старт.ahk",
+      "hold_seconds": 2.0
     },
     "RIGHT:PEACE": {
       "action": "none",
-      "target": ""
+      "target": "Num9",
+      "hold_seconds": 0.3
     },
     "RIGHT:THREE": {
       "action": "none",
-      "target": ""
+      "target": "Num8",
+      "hold_seconds": 0.3
     },
     "RIGHT:FOUR": {
       "action": "none",
-      "target": ""
+      "target": "",
+      "hold_seconds": 0.35
     },
     "RIGHT:OPEN_PALM": {
       "action": "none",
-      "target": ""
+      "target": "",
+      "hold_seconds": 0.35
     },
     "RIGHT:FIST": {
       "action": "none",
-      "target": ""
+      "target": "",
+      "hold_seconds": 0.35
     },
     "BOTH:THUMB_UP": {
       "action": "none",
-      "target": ""
+      "target": "",
+      "hold_seconds": 0.35
     },
     "BOTH:PINKY": {
       "action": "none",
-      "target": ""
+      "target": "",
+      "hold_seconds": 0.35
     },
     "BOTH:ONE": {
       "action": "none",
-      "target": ""
+      "target": "",
+      "hold_seconds": 0.35
     },
     "BOTH:PEACE": {
       "action": "none",
-      "target": ""
+      "target": "",
+      "hold_seconds": 1.3
     },
     "BOTH:THREE": {
       "action": "none",
-      "target": ""
+      "target": "",
+      "hold_seconds": 1.3
     },
     "BOTH:FOUR": {
       "action": "none",
-      "target": ""
+      "target": "",
+      "hold_seconds": 0.35
     },
     "BOTH:OPEN_PALM": {
       "action": "none",
-      "target": ""
+      "target": "",
+      "hold_seconds": 0.35
     },
     "BOTH:FIST": {
       "action": "none",
-      "target": ""
+      "target": "",
+      "hold_seconds": 0.35
     }
   },
   "language": "uk",
   "face_tracking_enabled": true,
   "inference_width": 640,
-  "scripts": []
+  "scripts": [
+    {
+      "name": "Discord",
+      "path": "C:\\Users\\user\\AppData\\Local\\Discord\\Discord.exe"
+    },
+    {
+      "name": "старт",
+      "path": "C:\\Users\\user\\Desktop\\старт.ahk"
+    }
+  ],
+  "hand_overlay_hold_seconds": 0.0
 }

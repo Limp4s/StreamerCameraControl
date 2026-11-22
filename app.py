@@ -47,15 +47,47 @@ def load_config():
     except Exception:
         return DEFAULT.copy()
 
+def _download_model(path: Path, url: str, min_size: int) -> Path:
+    """Ensure a complete MediaPipe model exists; download it if missing/incomplete."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and path.stat().st_size >= min_size:
+        return path
+
+    # Download to a temporary file so an interrupted download cannot leave a
+    # broken model that the next launch mistakenly treats as valid.
+    temp_path = path.with_name(path.name + ".download")
+    try:
+        if temp_path.exists():
+            temp_path.unlink()
+        request = urllib.request.Request(
+            url, headers={"User-Agent": "Mozilla/5.0"}
+        )
+        with urllib.request.urlopen(request, timeout=60) as response:
+            data = response.read()
+        if len(data) < min_size:
+            raise RuntimeError(
+                f"Завантажена модель занадто мала ({len(data)} байт). "
+                "Перевір інтернет-з'єднання або доступ до storage.googleapis.com."
+            )
+        temp_path.write_bytes(data)
+        temp_path.replace(path)
+    except Exception as e:
+        try:
+            if temp_path.exists():
+                temp_path.unlink()
+        except OSError:
+            pass
+        raise RuntimeError(
+            f"Не вдалося завантажити модель {path.name}. "
+            f"Перевір інтернет-з'єднання. Деталі: {e}"
+        ) from e
+    return path
+
 def get_model():
-    MODEL.parent.mkdir(exist_ok=True)
-    if not MODEL.exists(): urllib.request.urlretrieve(MODEL_URL, MODEL)
-    return MODEL
+    return _download_model(MODEL, MODEL_URL, 100_000)
 
 def get_face_model():
-    FACE_MODEL.parent.mkdir(exist_ok=True)
-    if not FACE_MODEL.exists(): urllib.request.urlretrieve(FACE_MODEL_URL, FACE_MODEL)
-    return FACE_MODEL
+    return _download_model(FACE_MODEL, FACE_MODEL_URL, 50_000)
 
 def _dist3(a, b):
     return ((a.x-b.x)**2 + (a.y-b.y)**2 + (a.z-b.z)**2) ** 0.5
