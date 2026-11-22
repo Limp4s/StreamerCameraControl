@@ -67,8 +67,8 @@
       "hold_seconds": 0.35
     },
     "RIGHT:ONE": {
-      "action": "script",
-      "target": "C:\\Users\\user\\Desktop\\старт.ahk",
+      "action": "none",
+      "target": "",
       "hold_seconds": 2.0
     },
     "RIGHT:PEACE": {
@@ -137,18 +137,9 @@
       "hold_seconds": 0.35
     }
   },
-  "language": "uk",
+  "language": "en",
   "face_tracking_enabled": true,
   "inference_width": 640,
-  "scripts": [
-    {
-      "name": "Discord",
-      "path": "C:\\Users\\user\\AppData\\Local\\Discord\\Discord.exe"
-    },
-    {
-      "name": "старт",
-      "path": "C:\\Users\\user\\Desktop\\старт.ahk"
-    }
-  ],
+  "scripts": [],
   "hand_overlay_hold_seconds": 0.0
 }
