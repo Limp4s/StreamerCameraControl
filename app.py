@@ -1,4 +1,4 @@
-import sys, json, time, urllib.request, webbrowser, os, subprocess
+import sys, json, time, urllib.request, webbrowser, os, subprocess, threading
 from collections import deque
 from pathlib import Path
 import cv2, mediapipe as mp
@@ -8,7 +8,7 @@ import pyautogui
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QImage, QPixmap, QAction
+from PySide6.QtGui import QImage, QPixmap, QAction, QKeySequence
 from PySide6.QtWidgets import *
 
 ROOT = Path(__file__).resolve().parent
@@ -26,7 +26,7 @@ HANDS = {"LEFT": "Ліва рука", "RIGHT": "Права рука", "BOTH": "�
 DEFAULT = {
     "camera_index": 0, "gesture_hold_seconds": 0.35, "cooldown_seconds": 1.2,
     "night_vision": False, "gamma": 1.5, "brightness": 12, "contrast": 1.25,
-    "camera_resolution": "1280x720", "face_presence_gate": False, "face_tracking_enabled": True, "inference_width": 640, "hand_overlay_hold_seconds": 0.5, "bindings": {}, "scripts": []
+    "camera_resolution": "1280x720", "mirror_camera": True, "face_presence_gate": False, "face_tracking_enabled": True, "hand_overlay_enabled": True, "virtual_camera_enabled": True, "inference_width": 640, "hand_overlay_hold_seconds": 0.5, "bindings": {}, "scripts": []
 }
 
 def load_config():
@@ -121,6 +121,90 @@ def detect_gesture(lm):
 
 LINKS = [(0,1),(1,2),(2,3),(3,4),(0,5),(5,6),(6,7),(7,8),(5,9),(9,10),(10,11),(11,12),(9,13),(13,14),(14,15),(15,16),(13,17),(17,18),(18,19),(19,20),(0,17)]
 
+SUPPORTED_SCRIPT_EXTENSIONS = {".ahk", ".exe", ".bat", ".cmd"}
+
+class KeyCaptureEdit(QLineEdit):
+    """Captures up to three key presses/chord parts instead of requiring manual key names."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._captured = []
+        self._capture_enabled = False
+        self._before_capture = ""
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(850)
+        self._timer.timeout.connect(self._finish_capture)
+        self.setPlaceholderText("Натисни тут до 3 клавіш. Backspace очищає; Ctrl+Backspace призначає Backspace.")
+
+    def set_capture_enabled(self, enabled):
+        self._capture_enabled = bool(enabled)
+        if not self._capture_enabled:
+            self._timer.stop(); self._captured.clear()
+
+    def focusInEvent(self, event):
+        self._before_capture = self.text()
+        super().focusInEvent(event)
+
+    def keyPressEvent(self, event):
+        if not self._capture_enabled:
+            super().keyPressEvent(event)
+            return
+        key = event.key()
+        modifiers = event.modifiers()
+        # Backspace/Delete clear the field by default. Ctrl+Backspace explicitly
+        # binds Backspace; Shift+Backspace and Alt+Backspace remain bindable too.
+        if key == Qt.Key_Backspace and modifiers == Qt.NoModifier:
+            self._timer.stop(); self._captured.clear(); self.clear(); event.accept(); return
+        if key == Qt.Key_Delete and modifiers == Qt.NoModifier:
+            self._timer.stop(); self._captured.clear(); self.clear(); event.accept(); return
+        if key == Qt.Key_Escape:
+            self._timer.stop(); self._captured.clear(); self.setText(self._before_capture); event.accept(); return
+        if key in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Tab):
+            if self._captured: self._finish_capture()
+            else: super().keyPressEvent(event)
+            return
+        names = []
+        if modifiers & Qt.ControlModifier: names.append("ctrl")
+        if modifiers & Qt.AltModifier: names.append("alt")
+        if modifiers & Qt.ShiftModifier: names.append("shift")
+        if modifiers & Qt.MetaModifier: names.append("win")
+        if key not in (Qt.Key_Control, Qt.Key_Alt, Qt.Key_Shift, Qt.Key_Meta):
+            name = QKeySequence(key).toString().lower()
+            aliases = {" ": "space", "esc": "esc", "return": "enter", "del": "delete", "backspace": "backspace", "pgup": "pageup", "pgdown": "pagedown"}
+            name = aliases.get(name, name)
+            if name and name not in names: names.append(name)
+        for name in names:
+            if name not in self._captured and len(self._captured) < 3: self._captured.append(name)
+        if self._captured:
+            self.setText("+".join(self._captured)); self._timer.start()
+        event.accept()
+
+    def _finish_capture(self):
+        self._timer.stop()
+        self._captured = []
+        self._before_capture = self.text()
+
+class ScriptDropList(QListWidget):
+    def __init__(self, add_paths, parent=None):
+        super().__init__(parent)
+        self.add_paths = add_paths
+        self.setAcceptDrops(True)
+        self.setDragDropMode(QAbstractItemView.DropOnly)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls(): event.acceptProposedAction()
+        else: event.ignore()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls(): event.acceptProposedAction()
+        else: event.ignore()
+
+    def dropEvent(self, event):
+        paths = [u.toLocalFile() for u in event.mimeData().urls() if u.isLocalFile()]
+        self.add_paths(paths)
+        event.acceptProposedAction()
+
+
 class NoWheelComboBox(QComboBox):
     """Не змінює вибір від коліщатка, коли список не відкритий."""
     def wheelEvent(self, event):
@@ -135,8 +219,8 @@ class Main(QMainWindow):
         super().__init__()
         self.setWindowTitle("Керування жестами")
         self.resize(1020, 740)
-        self.cfg = load_config(); self.cap = None; self.tracker = None
-        self.active = False; self.current_key = "—"; self.since = 0; self.last_actions = {}; self.face_detector = None; self.last_timestamp_ms = 0
+        self.cfg = load_config(); self.cap = None; self.tracker = None; self.virtual_cam = None; self.virtual_camera_size = None; self.virtual_frames_sent = 0
+        self.active = False; self._shutdown_thread = None; self.current_key = "—"; self.since = 0; self.last_actions = {}; self.face_detector = None; self.last_timestamp_ms = 0
         self.allow_quit = False; self.binding_widgets = {}; self.gesture_since = {}; self.fired_gestures = set(); self.face_history = deque(maxlen=3); self.last_hand_overlay = None
         self.build(); self.apply_language(); self.setup_tray()
         self.timer = QTimer(self); self.timer.timeout.connect(self.frame)
@@ -191,23 +275,29 @@ class Main(QMainWindow):
 
     def settings(self):
         w=QWidget(); l=QVBoxLayout(w); f,fl=self.panel("КАМЕРА ТА ВИДИМІСТЬ")
-        fl.addWidget(QLabel("Мова інтерфейсу")); self.language=NoWheelComboBox(); self.language.addItem("Українська","uk"); self.language.addItem("English","en"); self.language.addItem("Čeština","cs"); self.language.setCurrentIndex(max(0,self.language.findData(self.cfg.get("language","uk")))); self.language.currentIndexChanged.connect(self.apply_language); fl.addWidget(self.language)
+        fl.addWidget(QLabel("Мова інтерфейсу")); self.language=NoWheelComboBox(); self.language.addItem("Українська","uk"); self.language.addItem("English","en"); self.language.addItem("Čeština","cs"); self.language.addItem("Русский","ru"); self.language.addItem("Português","pt"); self.language.setCurrentIndex(max(0,self.language.findData(self.cfg.get("language","uk")))); self.language.currentIndexChanged.connect(self.apply_language); fl.addWidget(self.language)
         self.autostart=QCheckBox("Запускати разом із Windows"); self.autostart.setChecked(self.autostart_enabled()); self.autostart.toggled.connect(self.set_autostart); fl.addWidget(self.autostart)
         fl.addWidget(QLabel("Пристрій камери")); self.cam=NoWheelComboBox(); self.cam.addItems(["Камера 0","Камера 1","Камера 2"]); self.cam.setCurrentIndex(min(int(self.cfg.get("camera_index",0)),2)); fl.addWidget(self.cam)
         fl.addWidget(QLabel("Роздільна здатність камери")); self.resolution=NoWheelComboBox()
         for label, value in [("1280 × 720 (рекомендовано)","1280x720"),("1920 × 1080 (Full HD)","1920x1080"),("640 × 480 (швидше)","640x480")]: self.resolution.addItem(label,value)
         self.resolution.setCurrentIndex(max(0,self.resolution.findData(self.cfg.get("camera_resolution","1280x720")))); fl.addWidget(self.resolution)
+        self.mirror_camera=QCheckBox("Дзеркально відображати зображення камери")
+        self.mirror_camera.setChecked(bool(self.cfg.get("mirror_camera", True))); fl.addWidget(self.mirror_camera)
         self.night=QCheckBox("Покращення видимості в темряві"); self.night.setChecked(bool(self.cfg.get("night_vision",False))); fl.addWidget(self.night)
         self.face_tracking=QCheckBox("Показувати рамки навколо виявлених облич")
         self.face_tracking.setChecked(bool(self.cfg.get("face_tracking_enabled", self.cfg.get("face_presence_gate", True))))
         fl.addWidget(self.face_tracking)
         self.face_gate=QCheckBox("Виконувати жести лише коли обличчя є в кадрі")
         self.face_gate.setChecked(bool(self.cfg.get("face_presence_gate",False))); fl.addWidget(self.face_gate)
+        self.hand_overlay=QCheckBox("Показувати скелет рук у відео")
+        self.hand_overlay.setChecked(bool(self.cfg.get("hand_overlay_enabled", True))); fl.addWidget(self.hand_overlay)
+        self.virtual_camera_enabled=QCheckBox("Виводити оброблене відео у віртуальну камеру (OBS / Discord)")
+        self.virtual_camera_enabled.setChecked(bool(self.cfg.get("virtual_camera_enabled", False))); fl.addWidget(self.virtual_camera_enabled)
         fl.addWidget(QLabel("Утримання зображення руки (секунди)")); self.hand_overlay_hold=QDoubleSpinBox(); self.hand_overlay_hold.setRange(0.0,5.0); self.hand_overlay_hold.setSingleStep(0.1); self.hand_overlay_hold.setDecimals(1); self.hand_overlay_hold.setValue(float(self.cfg.get("hand_overlay_hold_seconds",0.5))); fl.addWidget(self.hand_overlay_hold)
         fl.addWidget(QLabel("Гамма")); self.gamma=self.make_slider(5,30,int(float(self.cfg.get("gamma",1.5))*10),"{:.1f}",10); fl.addWidget(self.gamma[0])
         fl.addWidget(QLabel("Яскравість")); self.brightness=self.make_slider(-50,80,int(self.cfg.get("brightness",12)),"{}",1); fl.addWidget(self.brightness[0])
         fl.addWidget(QLabel("Контрастність")); self.contrast=self.make_slider(5,30,int(float(self.cfg.get("contrast",1.25))*10),"{:.1f}",10); fl.addWidget(self.contrast[0])
-        hint=QLabel("Обробка впливає лише на зображення в програмі. У повній темряві потрібна ІЧ-камера або ІЧ-підсвічування."); hint.setWordWrap(True); hint.setStyleSheet("color:#c0c6ca;padding:8px;background:#202326;border-radius:8px"); fl.addWidget(hint)
+        hint=QLabel("Оброблене відео надсилається у віртуальну камеру StrimerCameraControl. У OBS та Discord вибери цей пристрій; фізичну камеру використовує ця програма."); hint.setWordWrap(True); hint.setStyleSheet("color:#c0c6ca;padding:8px;background:#202326;border-radius:8px"); fl.addWidget(hint)
         self.autosave_status=QLabel("Зміни зберігаються автоматично"); self.autosave_status.setStyleSheet("color:#8bd6ae;padding:4px"); fl.addWidget(self.autosave_status)
         copy_cfg=QPushButton("КОПІЮВАТИ КОНФІГ У БУФЕР ОБМІНУ"); copy_cfg.clicked.connect(self.copy_config); fl.addWidget(copy_cfg)
         trayhint=QLabel("✕ ховає програму в трей. Для виходу натисни правою кнопкою на іконку трея → «Вийти»."); trayhint.setWordWrap(True); trayhint.setStyleSheet("color:#c0c6ca;padding:8px"); fl.addWidget(trayhint)
@@ -221,7 +311,7 @@ class Main(QMainWindow):
             for ri,(gesture_key,gesture_name) in enumerate(GESTURES.items(),1):
                 grid.addWidget(QLabel(gesture_name),ri,0)
                 action=NoWheelComboBox(); action.addItem("Немає дії","none"); action.addItem("Натиснути клавішу","key"); action.addItem("Ввести текст","text"); action.addItem("Відкрити вебсторінку","url")
-                target=QLineEdit(); target.setPlaceholderText("Клавіша / текст / URL або вибери скрипт у списку")
+                target=KeyCaptureEdit(); target.setPlaceholderText("Клавіша / текст / URL або вибери скрипт у списку")
                 hold=QDoubleSpinBox(); hold.setRange(0.05,5.0); hold.setSingleStep(0.05); hold.setDecimals(2); hold.setSuffix(" с"); hold.setValue(float(self.cfg.get("bindings",{}).get(f"{hand}:{gesture_key}",{}).get("hold_seconds",0.35)))
                 saved=self.cfg.get("bindings",{}).get(f"{hand}:{gesture_key}",{})
                 self._add_script_actions(action)
@@ -232,6 +322,8 @@ class Main(QMainWindow):
                     ix=action.findData("script")
                 action.setCurrentIndex(max(0,ix)); target.setText(saved_target)
                 target.setReadOnly(isinstance(action.currentData(),str) and action.currentData().startswith("script|"))
+                target.set_capture_enabled(action.currentData() == "key")
+                if action.currentData() == "key": target.setPlaceholderText("Натисни тут до 3 клавіш: Shift+Q+F")
                 action.currentIndexChanged.connect(lambda _=None, cb=action, tb=target: self.binding_action_changed(cb,tb))
                 grid.addWidget(action,ri,1); grid.addWidget(target,ri,2); grid.addWidget(hold,ri,3); self.binding_widgets[f"{hand}:{gesture_key}"]=(action,target,hold)
             fl.addLayout(grid); lay.addWidget(f)
@@ -242,12 +334,16 @@ class Main(QMainWindow):
             path=str(item.get("path", "")).strip()
             if path:
                 name=item.get("name") or Path(path).stem
-                combo.addItem("Скрипт: "+name, "script|"+path)
+                prefix = {"en":"Script: ", "cs":"Skript: ", "ru":"Скрипт: ", "pt":"Script: "}.get(self.language.currentData(), "Скрипт: ")
+                combo.addItem(prefix+name, "script|"+path)
 
     def binding_action_changed(self, combo, target):
         data=combo.currentData()
         is_script=isinstance(data, str) and data.startswith("script|")
         target.setReadOnly(is_script)
+        target.set_capture_enabled(data == "key")
+        if data == "key": target.setPlaceholderText("Натисни тут до 3 клавіш: Shift+Q+F")
+        else: target.setPlaceholderText("Клавіша / текст / URL або вибери скрипт у списку")
         if is_script:
             target.setText(data.split("|", 1)[1])
         self.schedule_autosave()
@@ -276,7 +372,7 @@ class Main(QMainWindow):
         w=QWidget(); outer=QVBoxLayout(w); f,fl=self.panel("МОЇ СКРИПТИ · AHK / EXE / BAT")
         intro=QLabel("Додавай власні файли .ahk, .exe, .bat або .cmd. Додані файли зберігаються у конфігурації; їх можна запускати кнопкою або прив’язати до жесту на сторінці «Прив’язки команд».")
         intro.setWordWrap(True); fl.addWidget(intro)
-        self.scripts_list=QListWidget(); self.scripts_list.setMinimumHeight(220); fl.addWidget(self.scripts_list)
+        self.scripts_list=ScriptDropList(self.add_script_paths); self.scripts_list.setMinimumHeight(220); self.scripts_list.setToolTip("Перетягни сюди файли .ahk, .exe, .bat або .cmd"); fl.addWidget(self.scripts_list)
         row=QHBoxLayout(); add=QPushButton("＋ ДОДАТИ СКРИПТ"); add.clicked.connect(self.add_script); row.addWidget(add)
         run=QPushButton("▶ ЗАПУСТИТИ ВИБРАНИЙ"); run.clicked.connect(self.run_selected_script); row.addWidget(run)
         remove=QPushButton("ВИДАЛИТИ"); remove.clicked.connect(self.remove_selected_script); row.addWidget(remove); fl.addLayout(row)
@@ -287,7 +383,7 @@ class Main(QMainWindow):
     def connect_autosave_signals(self):
         for widget in (self.cam, self.resolution, self.language):
             widget.currentIndexChanged.connect(self.schedule_autosave)
-        for widget in (self.night, self.face_tracking, self.face_gate):
+        for widget in (self.night, self.mirror_camera, self.face_tracking, self.face_gate, self.hand_overlay, self.virtual_camera_enabled):
             widget.toggled.connect(self.schedule_autosave)
         self.face_tracking.toggled.connect(self.update_face_detector)
         self.face_gate.toggled.connect(self.update_face_detector)
@@ -307,10 +403,10 @@ class Main(QMainWindow):
 
     def collect_config(self):
         self.cfg.update({"camera_index":self.cam.currentIndex(), "camera_resolution":self.resolution.currentData(),
-            "night_vision":self.night.isChecked(), "gamma":self.gamma[1].value()/10,
+            "night_vision":self.night.isChecked(), "mirror_camera":self.mirror_camera.isChecked(), "gamma":self.gamma[1].value()/10,
             "brightness":self.brightness[1].value(), "contrast":self.contrast[1].value()/10,
             "language":self.language.currentData(), "face_presence_gate":self.face_gate.isChecked(),
-            "face_tracking_enabled":self.face_tracking.isChecked(), "hand_overlay_hold_seconds":self.hand_overlay_hold.value()})
+            "face_tracking_enabled":self.face_tracking.isChecked(), "hand_overlay_enabled":self.hand_overlay.isChecked(), "virtual_camera_enabled":self.virtual_camera_enabled.isChecked(), "hand_overlay_hold_seconds":self.hand_overlay_hold.value()})
         bindings={}
         for key,(action,target,hold) in self.binding_widgets.items():
             selected=action.currentData()
@@ -344,16 +440,34 @@ class Main(QMainWindow):
         self.refresh_binding_script_options()
 
     def add_script(self):
-        path,_=QFileDialog.getOpenFileName(self,"Додати скрипт",str(Path.home()),"Скрипти (*.ahk *.exe *.bat *.cmd)")
-        if not path: return
-        ext=Path(path).suffix.lower()
-        if ext not in (".ahk",".exe",".bat",".cmd"):
-            QMessageBox.warning(self,"Формат не підтримується","Дозволені лише AHK, EXE, BAT та CMD."); return
-        resolved=str(Path(path).resolve())
-        if any(x.get("path","").lower()==resolved.lower() for x in self.cfg.get("scripts",[])):
-            QMessageBox.information(self,"Скрипт уже доданий","Цей файл уже є у списку."); return
-        self.cfg.setdefault("scripts",[]).append({"name":Path(path).stem,"path":resolved})
-        self.refresh_scripts_list(); self.save_config_silent()
+        title = {"en":"Add script", "cs":"Přidat skript", "ru":"Добавить скрипт", "pt":"Adicionar script"}.get(self.language.currentData(), "Додати скрипт")
+        paths,_=QFileDialog.getOpenFileNames(self,title,str(Path.home()),"Scripts (*.ahk *.exe *.bat *.cmd)")
+        if paths: self.add_script_paths(paths)
+
+    def add_script_paths(self, paths):
+        added=0; rejected=[]
+        for path in paths:
+            file_path=Path(path)
+            if not file_path.is_file() or file_path.suffix.lower() not in SUPPORTED_SCRIPT_EXTENSIONS:
+                rejected.append(file_path.name); continue
+            resolved=str(file_path.resolve())
+            if any(str(x.get("path","")).lower()==resolved.lower() for x in self.cfg.get("scripts",[])):
+                continue
+            self.cfg.setdefault("scripts",[]).append({"name":file_path.stem,"path":resolved}); added+=1
+        self.refresh_scripts_list()
+        if added: self.save_config_silent()
+        if rejected:
+            if self.language.currentData() == "en":
+                title, prefix, allowed = "Unsupported format", "Skipped files: ", "\nAllowed: AHK, EXE, BAT, CMD."
+            elif self.language.currentData() == "cs":
+                title, prefix, allowed = "Nepodporovaný formát", "Přeskočené soubory: ", "\nPovoleno: AHK, EXE, BAT, CMD."
+            elif self.language.currentData() == "ru":
+                title, prefix, allowed = "Неподдерживаемый формат", "Пропущенные файлы: ", "\nРазрешены: AHK, EXE, BAT, CMD."
+            elif self.language.currentData() == "pt":
+                title, prefix, allowed = "Formato não suportado", "Arquivos ignorados: ", "\nPermitidos: AHK, EXE, BAT, CMD."
+            else:
+                title, prefix, allowed = "Формат не підтримується", "Пропущено файли: ", "\nДозволені: AHK, EXE, BAT, CMD."
+            QMessageBox.warning(self, title, prefix + ", ".join(rejected) + allowed)
 
     def remove_selected_script(self):
         ix=self.scripts_list.currentRow()
@@ -367,10 +481,10 @@ class Main(QMainWindow):
                 path = registered.get("path", path)
                 break
         file=Path(path).expanduser()
-        if not file.is_file(): raise FileNotFoundError(f"Файл не знайдено: {file}")
+        if not file.is_file(): raise FileNotFoundError(self.tr("Файл не знайдено: ")+str(file))
         ext=file.suffix.lower()
         if ext not in (".ahk",".exe",".bat",".cmd"):
-            raise ValueError("Дозволені лише .ahk, .exe, .bat та .cmd")
+            raise ValueError(self.tr("Дозволені лише .ahk, .exe, .bat та .cmd"))
         if sys.platform == "win32":
             if ext in (".bat",".cmd"):
                 subprocess.Popen(["cmd.exe","/c","start","",str(file)],cwd=str(file.parent),shell=False)
@@ -385,11 +499,11 @@ class Main(QMainWindow):
     def run_selected_script(self):
         ix=self.scripts_list.currentRow()
         if ix<0:
-            QMessageBox.information(self,"Мої скрипти","Спочатку вибери скрипт зі списку."); return
+            QMessageBox.information(self,self.tr("Мої скрипти"),self.tr("Спочатку вибери скрипт зі списку.")); return
         try:
             item=self.cfg["scripts"][ix]; self.launch_script_path(item["path"])
-            self.event.setText("Запущено скрипт: "+item.get("name",Path(item["path"]).name))
-        except Exception as e: QMessageBox.warning(self,"Не вдалося запустити",str(e))
+            self.event.setText(self.tr("Запущено скрипт: ")+item.get("name",Path(item["path"]).name))
+        except Exception as e: QMessageBox.warning(self,self.tr("Не вдалося запустити"),str(e))
 
     def make_slider(self,minimum,maximum,value,fmt,divisor):
         row=QWidget(); lay=QHBoxLayout(row); lay.setContentsMargins(0,0,0,0); slider=QSlider(Qt.Horizontal); slider.setRange(minimum,maximum); slider.setValue(max(minimum,min(maximum,value)))
@@ -422,7 +536,7 @@ class Main(QMainWindow):
                     try: winreg.DeleteValue(key, "GestureControl")
                     except FileNotFoundError: pass
         except Exception as e:
-            QMessageBox.warning(self, "Автозапуск", f"Не вдалося змінити автозапуск: {e}")
+            QMessageBox.warning(self, self.tr("Автозапуск"), self.tr("Не вдалося змінити автозапуск: ")+str(e))
             self.autostart.blockSignals(True); self.autostart.setChecked(not enabled); self.autostart.blockSignals(False)
 
     def apply_language(self, *_):
@@ -431,11 +545,29 @@ class Main(QMainWindow):
         self.cfg["language"] = lang
         translations = {
           "en": {
+            "Керування жестами":"Gesture Control", "Додати скрипт":"Add script", "Виявляти обличчя та показувати рамки":"Detect faces and show boxes", "Дозволені лише .ahk, .exe, .bat та .cmd":"Only .ahk, .exe, .bat and .cmd files are allowed", "Файл не знайдено: ":"File not found: ", "Запуск AHK/BAT доступний у Windows.":"Launching AHK/BAT files is available on Windows.", "Не вдалося відкрити посилання у браузері за замовчуванням.":"Could not open the link in the default browser.", "Не вдалося відкрити камеру. Перевір дозвіл Windows або вибери іншу камеру.":"Could not open the camera. Check Windows permissions or select another camera.", "Помилка запуску камери":"Camera startup error", "● ПОМИЛКА":"● ERROR", "Формат не підтримується":"Unsupported format", "Пропущено файли: ":"Skipped files: ", " байт). Перевір інтернет-з'єднання або доступ до storage.googleapis.com.":" bytes). Check your internet connection or access to storage.googleapis.com.", "Не вдалося завантажити модель ":"Could not download model ", ". Перевір інтернет-з'єднання. Деталі: ":". Check your internet connection. Details: ", "Помилка автозбереження: ":"Autosave error: ", "ПОМИЛКА ОБРОБКИ КАДРУ: ":"FRAME PROCESSING ERROR: ", " → виконано: ":" → executed: ", "ОБЛИЧЧЯ:":"FACES:", "Натисни тут до 3 клавіш. Backspace очищає; Ctrl+Backspace призначає Backspace.":"Click here and press up to 3 keys. Backspace clears; Ctrl+Backspace binds Backspace.",
+            "👍 Великий палець угору\n🤙 Мізинець\n☝ Один палець\n✌ Два пальці\n🤟 Три пальці\n🖖 Чотири пальці\n🖐 Відкрита долоня\n✊ Кулак":"👍 Thumb up\n🤙 Pinky\n☝ One finger\n✌ Two fingers\n🤟 Three fingers\n🖖 Four fingers\n🖐 Open palm\n✊ Fist",
             "КЕРУВАННЯ ЖЕСТАМИ":"GESTURE CONTROL", "РОЗДІЛИ":"SECTIONS", "Головна":"Home", "Налаштування":"Settings", "Прив’язки команд":"Command bindings", "Мої скрипти":"My scripts",
             "ЗОБРАЖЕННЯ З КАМЕРИ":"CAMERA PREVIEW", "КАМЕРУ НЕ ЗАПУЩЕНО\n\nНатисни «Увімкнути камеру»":"CAMERA NOT STARTED\n\nPress “Start camera”",
             "▶  УВІМКНУТИ КАМЕРУ":"▶  START CAMERA", "■  ЗУПИНИТИ КАМЕРУ":"■  STOP CAMERA", "РОЗПІЗНАВАННЯ":"RECOGNITION", "ПОТОЧНИЙ ЖЕСТ":"CURRENT GESTURE", "РУКА":"HAND", "СТАН ВІДСТЕЖЕННЯ":"TRACKING STATUS", "ОСТАННЯ ДІЯ":"LAST ACTION", "Дій не виконано":"No actions performed", "РОЗПІЗНАВАНІ ЖЕСТИ":"RECOGNIZED GESTURES",
-            "Виконувати жести лише коли обличчя є в кадрі":"Require a face in the camera view for gestures", "Показувати рамки навколо виявлених облич":"Show boxes around detected faces", "КАМЕРА ТА ВИДИМІСТЬ":"CAMERA AND VISIBILITY", "Мова інтерфейсу":"Interface language", "Запускати разом із Windows":"Start with Windows", "Пристрій камери":"Camera device", "Роздільна здатність камери":"Camera resolution", "1280 × 720 (рекомендовано)":"1280 × 720 (recommended)", "1920 × 1080 (Full HD)":"1920 × 1080 (Full HD)", "640 × 480 (швидше)":"640 × 480 (faster)", "Камера 0":"Camera 0", "Камера 1":"Camera 1", "Камера 2":"Camera 2", "Покращення видимості в темряві":"Low-light enhancement", "Гамма":"Gamma", "Яскравість":"Brightness", "Контрастність":"Contrast", "Зберегти налаштування":"Save settings", "ЗБЕРЕГТИ НАЛАШТУВАННЯ":"SAVE SETTINGS", "КОПІЮВАТИ КОНФІГ У БУФЕР ОБМІНУ":"COPY CONFIG TO CLIPBOARD", "✕ ховає програму в трей. Для виходу натисни правою кнопкою на іконку трея → «Вийти».":"✕ hides the app to the system tray. To exit, right-click the tray icon → Exit.",
-            "ЖЕСТ":"GESTURE", "ДІЯ":"ACTION", "КЛАВІША / ТЕКСТ / URL":"KEY / TEXT / URL", "Немає дії":"No action", "Натиснути клавішу":"Press key", "Ввести текст":"Type text", "Відкрити вебсторінку":"Open website", "Запустити скрипт (шлях до файлу)":"Run script (file path)", "ПОШУК РУКИ…":"SEARCHING FOR HAND…", "ЗНАЙДЕНО РУК: ":"HANDS FOUND: ", "ОЧІКУВАННЯ":"WAITING", "НЕАКТИВНО":"INACTIVE", "● ПРАЦЮЄ":"● RUNNING", "КАМЕРУ ЗУПИНЕНО":"CAMERA STOPPED", "Ліва рука":"Left hand", "Права рука":"Right hand", "Обидві руки":"Both hands",
+            "Виконувати жести лише коли обличчя є в кадрі":"Require a face in the camera view for gestures", "Показувати скелет рук у відео":"Show hand skeleton overlay", "Виводити оброблене відео у віртуальну камеру (OBS / Discord)":"Output processed video to virtual camera (OBS / Discord)", "Утримання зображення руки (секунди)":"Hand overlay hold time (seconds)", "Показувати рамки навколо виявлених облич":"Show boxes around detected faces", "КАМЕРА ТА ВИДИМІСТЬ":"CAMERA AND VISIBILITY", "Мова інтерфейсу":"Interface language", "Запускати разом із Windows":"Start with Windows", "Пристрій камери":"Camera device", "Роздільна здатність камери":"Camera resolution", "1280 × 720 (рекомендовано)":"1280 × 720 (recommended)", "1920 × 1080 (Full HD)":"1920 × 1080 (Full HD)", "640 × 480 (швидше)":"640 × 480 (faster)", "Камера 0":"Camera 0", "Камера 1":"Camera 1", "Камера 2":"Camera 2", "Покращення видимості в темряві":"Low-light enhancement", "Дзеркально відображати зображення камери":"Mirror camera image", "Гамма":"Gamma", "Яскравість":"Brightness", "Контрастність":"Contrast", "Зберегти налаштування":"Save settings", "ЗБЕРЕГТИ НАЛАШТУВАННЯ":"SAVE SETTINGS", "КОПІЮВАТИ КОНФІГ У БУФЕР ОБМІНУ":"COPY CONFIG TO CLIPBOARD", "✕ ховає програму в трей. Для виходу натисни правою кнопкою на іконку трея → «Вийти».":"✕ hides the app to the system tray. To exit, right-click the tray icon → Exit.",
+            "ЖЕСТ":"GESTURE", "ДІЯ":"ACTION", "ЛІВА":"LEFT", "ПРАВА":"RIGHT", "Знайдено рук: ":"Hands found: ", "Прив’язки зберігаються автоматично":"Bindings are saved automatically",
+            "ЛІВА РУКА":"LEFT HAND", "ПРАВА РУКА":"RIGHT HAND", "ОБИДВІ РУКИ":"BOTH HANDS", "РУКА":"HAND", "ДОДАТИ СКРИПТ":"ADD SCRIPT", "＋ ДОДАТИ СКРИПТ":"＋ ADD SCRIPT", "▶ ЗАПУСТИТИ ВИБРАНИЙ":"▶ RUN SELECTED", "ВИДАЛИТИ":"REMOVE",
+            "Не вдалося запустити віртуальну камеру StrimerCameraControl. Запусти INSTALL.bat від імені адміністратора або перевстанови драйвер. Деталі: ":"Could not start the virtual camera. Install OBS Studio and start OBS Virtual Camera, or install Unity Capture. Details: ",
+            "Мова інтерфейсу":"Interface language", "Запускати разом із Windows":"Start with Windows", "Оброблене відео надсилається у віртуальну камеру StrimerCameraControl. У OBS та Discord вибери цей пристрій; фізичну камеру використовує ця програма.":"Processed frames are sent to a compatible virtual-camera driver (OBS Virtual Camera or Unity Capture). Select that virtual device in OBS or Discord; this app owns the physical webcam stream.",
+            "Зміни зберігаються автоматично":"Changes are saved automatically", "Є незбережені зміни…":"Unsaved changes…", "Збереження…":"Saving…", "✓ Усі налаштування автоматично збережено":"✓ All settings saved automatically", "✓ Прив’язки автоматично збережено":"✓ Bindings saved automatically",
+            "Налаштуй окрему команду для кожної руки. Для прив’язки «Обидві руки» жест має бути показаний одночасно двома руками.":"Configure a separate action for each hand. For the Both hands binding, the gesture must be detected on both hands at the same time.", "УТРИМАННЯ (С)":"HOLD (S)",
+            "Додавай власні файли .ahk, .exe, .bat або .cmd. Додані файли зберігаються у конфігурації; їх можна запускати кнопкою або прив’язати до жесту на сторінці «Прив’язки команд».":"Add your own .ahk, .exe, .bat or .cmd files. Added files are saved in the configuration; you can run them or assign them to a gesture on the Command bindings page.",
+            "Для AHK потрібен встановлений AutoHotkey або коректна асоціація .ahk у Windows. Скрипти запускаються від імені поточного користувача.":"AutoHotkey or a valid .ahk file association in Windows is required for AHK scripts. Scripts run as the current user.",
+            "Перетягни сюди файли .ahk, .exe, .bat або .cmd":"Drop .ahk, .exe, .bat or .cmd files here", "Клавіша / текст / URL або вибери скрипт у списку":"Key / text / URL, or select a script from the list", "Натисни тут до 3 клавіш: Shift+Q+F":"Click here and press up to 3 keys: Shift+Q+F", "Focus here, then press up to 3 keys":"Click here and press up to 3 keys. Backspace clears; Ctrl+Backspace binds Backspace.",
+            "✕ ховає програму в трей. Для виходу натисни правою кнопкою на іконку трея → «Вийти».":"✕ hides the app to the system tray. To exit, right-click the tray icon and choose Exit.",
+            "ЗОБРАЖЕННЯ З КАМЕРИ":"CAMERA PREVIEW", "МОЇ СКРИПТИ · AHK / EXE / BAT":"MY SCRIPTS · AHK / EXE / BAT", "Дій не виконано":"No actions performed", "ОСТАННЯ ДІЯ":"LAST ACTION", "РОЗПІЗНАВАНІ ЖЕСТИ":"RECOGNIZED GESTURES",
+            "Обличчя не виявлено — очікую":"No face detected — waiting", "ОБЛИЧЧЯ НЕ ВИЯВЛЕНО — ОЧІКУЮ":"NO FACE DETECTED — WAITING", "ПОШУК РУКИ…":"SEARCHING FOR HAND…", "ЗНАЙДЕНО РУК: ":"HANDS FOUND: ", "НЕМАЄ КАДРУ З КАМЕРИ":"NO CAMERA FRAME", "ЗАВАНТАЖЕННЯ МОДЕЛІ…":"LOADING MODEL…", "ПОМИЛКА ОБРОБКИ КАДРУ:":"FRAME PROCESSING ERROR:", "Помилка виконання прив'язки: ":"Binding execution error: ", "Помилка налаштування детекції обличчя: ":"Face detection setup error: ",
+            "Камеру зупинено через помилку, щоб уникнути зависання.":"Camera stopped after an error to prevent the app from freezing.", "Запущено скрипт: ":"Script started: ", "Не вдалося запустити":"Unable to launch", "Мої скрипти":"My scripts", "Спочатку вибери скрипт зі списку.":"Select a script from the list first.",
+            "Зупинити камеру":"Stop camera", "Відкрити":"Open", "Згорнути в трей":"Minimize to tray", "Вийти":"Exit", "Конфіг":"Configuration", "Конфігурацію скопійовано в буфер обміну.":"Configuration copied to clipboard.", "Помилка":"Error", "Не вдалося скопіювати конфігурацію: ":"Could not copy configuration: ", "Автозапуск":"Startup", "Не вдалося змінити автозапуск: ":"Could not change startup setting: ",
+            "КАМЕРУ ЗУПИНЕНО":"CAMERA STOPPED", "НЕАКТИВНО":"INACTIVE", "● НЕАКТИВНО":"● INACTIVE", "● ПРАЦЮЄ":"● RUNNING", "ПОМИЛКА ІНІЦІАЛІЗАЦІЇ":"INITIALIZATION ERROR", "ПОМИЛКА":"ERROR", "ЛІВА":"LEFT", "ПРАВА":"RIGHT", "Обличчя":"Face", "ЖЕСТИ АКТИВНІ":"GESTURES ACTIVE", " · ЖЕСТИ АКТИВНІ":" · GESTURES ACTIVE",
+            "Налаштування":"Settings", "Прив’язки команд":"Command bindings", "Головна":"Home", "Мої скрипти":"My scripts", "Скрипт: ":"Script: ", "Підтримуються AHK, EXE, BAT, CMD":"Supported: AHK, EXE, BAT, CMD", "Завантаження моделі…":"Loading model…",
+            "Клавіша / текст / URL":"Key / text / URL", "Утримання (с)":"Hold (s)", "УТРИМАННЯ (С)":"HOLD (S)", "ДІЯ":"ACTION", "ЖЕСТ":"GESTURE", "Налаштуй окрему команду для кожної руки. Для прив’язки «Обидві руки» жест має бути показаний одночасно двома руками.":"Configure a separate action for each hand. For the Both hands binding, the gesture must be detected on both hands at the same time.", "УТРИМАННЯ (С)":"HOLD (S)", "Утримання (с)":"Hold (s)", "КЛАВІША / ТЕКСТ / URL":"KEY / TEXT / URL", "Немає дії":"No action", "Натиснути клавішу":"Press key", "Ввести текст":"Type text", "Відкрити вебсторінку":"Open website", "Запустити скрипт (шлях до файлу)":"Run script (file path)", "ПОШУК РУКИ…":"SEARCHING FOR HAND…", "ЗНАЙДЕНО РУК: ":"HANDS FOUND: ", "ОЧІКУВАННЯ":"WAITING", "НЕАКТИВНО":"INACTIVE", "● ПРАЦЮЄ":"● RUNNING", "КАМЕРУ ЗУПИНЕНО":"CAMERA STOPPED", "Ліва рука":"Left hand", "Права рука":"Right hand", "Обидві руки":"Both hands",
             "Великий палець угору":"Thumb up", "Мізинець":"Pinky", "Один палець":"One finger", "Два пальці":"Two fingers", "Три пальці":"Three fingers", "Чотири пальці":"Four fingers", "Відкрита долоня":"Open palm", "Кулак":"Fist",
             "Завантаження моделі…":"Loading model…", "ПОМИЛКА ІНІЦІАЛІЗАЦІЇ":"INITIALIZATION ERROR", "КАМЕРУ ЗУПИНЕНО":"CAMERA STOPPED"
           },
@@ -443,17 +575,54 @@ class Main(QMainWindow):
             "КЕРУВАННЯ ЖЕСТАМИ":"OVLÁDÁNÍ GESTY", "РОЗДІЛИ":"SEKCE", "Головна":"Domů", "Налаштування":"Nastavení", "Прив’язки команд":"Přiřazení příkazů", "Мої скрипти":"Moje skripty",
             "ЗОБРАЖЕННЯ З КАМЕРИ":"NÁHLED KAMERY", "КАМЕРУ НЕ ЗАПУЩЕНО\n\nНатисни «Увімкнути камеру»":"KAMERA NENÍ SPUŠTĚNA\n\nStiskni „Spustit kameru“",
             "▶  УВІМКНУТИ КАМЕРУ":"▶  SPUSTIT KAMERU", "■  ЗУПИНИТИ КАМЕРУ":"■  ZASTAVIT KAMERU", "РОЗПІЗНАВАННЯ":"ROZPOZNÁVÁNÍ", "ПОТОЧНИЙ ЖЕСТ":"AKTUÁLNÍ GESTO", "РУКА":"RUKA", "СТАН ВІДСТЕЖЕННЯ":"STAV SLEDOVÁNÍ", "ОСТАННЯ ДІЯ":"POSLEDNÍ AKCE", "Дій не виконано":"Žádné akce", "РОЗПІЗНАВАНІ ЖЕСТИ":"ROZPOZNANÁ GESTA",
-            "Виконувати жести лише коли обличчя є в кадрі":"Provádět gesta pouze při detekci obličeje", "Виявляти обличчя та показувати рамки":"Detekovat obličeje a zobrazit rámečky", "КАМЕРА ТА ВИДИМІСТЬ":"KAMERA A VIDITELNOST", "Мова інтерфейсу":"Jazyk rozhraní", "Запускати разом із Windows":"Spouštět při startu Windows", "Пристрій камери":"Kamera", "Роздільна здатність камери":"Rozlišení kamery", "1280 × 720 (рекомендовано)":"1280 × 720 (doporučeno)", "1920 × 1080 (Full HD)":"1920 × 1080 (Full HD)", "640 × 480 (швидше)":"640 × 480 (rychlejší)", "Камера 0":"Kamera 0", "Камера 1":"Kamera 1", "Камера 2":"Kamera 2", "Покращення видимості в темряві":"Zlepšení viditelnosti ve tmě", "Гамма":"Gama", "Яскравість":"Jas", "Контрастність":"Kontrast", "ЗБЕРЕГТИ НАЛАШТУВАННЯ":"ULOŽIT NASTAVENÍ", "КОПІЮВАТИ КОНФІГ У БУФЕР ОБМІНУ":"KOPÍROVAT KONFIGURACI", "ЖЕСТ":"GESTO", "ДІЯ":"AKCE", "КЛАВІША / ТЕКСТ / URL":"KLÁVESA / TEXT / URL", "Немає дії":"Žádná akce", "Натиснути клавішу":"Stisknout klávesu", "Ввести текст":"Napsat text", "Відкрити вебсторінку":"Otevřít web", "Запустити скрипт (шлях до файлу)":"Spustit skript (cesta k souboru)", "ПОШУК РУКИ…":"HLEDÁNÍ RUKY…", "ОЧІКУВАННЯ":"ČEKÁNÍ", "НЕАКТИВНО":"NEAKTIVNÍ", "● ПРАЦЮЄ":"● BĚŽÍ", "КАМЕРУ ЗУПИНЕНО":"KAMERA ZASTAVENA", "Ліва рука":"Levá ruka", "Права рука":"Pravá ruka", "Обидві руки":"Obě ruce",
+            "Виконувати жести лише коли обличчя є в кадрі":"Provádět gesta pouze při detekci obličeje", "Оброблене відео надсилається у віртуальну камеру StrimerCameraControl. У OBS та Discord вибери цей пристрій; фізичну камеру використовує ця програма.":"Zpracované snímky se odesílají do kompatibilního ovladače virtuální kamery (OBS Virtual Camera nebo Unity Capture). V OBS či Discordu vyber toto virtuální zařízení; fyzickou kameru používá tato aplikace.", "Показувати скелет рук у відео":"Zobrazit kostru ruky ve videu", "Виводити оброблене відео у віртуальну камеру (OBS / Discord)":"Odesílat zpracované video do virtuální kamery (OBS / Discord)", "Утримання зображення руки (секунди)":"Doba zobrazení kostry ruky (sekundy)", "Виявляти обличчя та показувати рамки":"Detekovat obličeje a zobrazit rámečky", "КАМЕРА ТА ВИДИМІСТЬ":"KAMERA A VIDITELNOST", "Мова інтерфейсу":"Jazyk rozhraní", "Запускати разом із Windows":"Spouštět při startu Windows", "Пристрій камери":"Kamera", "Роздільна здатність камери":"Rozlišení kamery", "1280 × 720 (рекомендовано)":"1280 × 720 (doporučeno)", "1920 × 1080 (Full HD)":"1920 × 1080 (Full HD)", "640 × 480 (швидше)":"640 × 480 (rychlejší)", "Камера 0":"Kamera 0", "Камера 1":"Kamera 1", "Камера 2":"Kamera 2", "Покращення видимості в темряві":"Zlepšení viditelnosti ve tmě", "Дзеркально відображати зображення камери":"Zrcadlit obraz kamery", "Гамма":"Gama", "Яскравість":"Jas", "Контрастність":"Kontrast", "ЗБЕРЕГТИ НАЛАШТУВАННЯ":"ULOŽIT NASTAVENÍ", "КОПІЮВАТИ КОНФІГ У БУФЕР ОБМІНУ":"KOPÍROVAT KONFIGURACI", "ЖЕСТ":"GESTO", "ДІЯ":"AKCE", "КЛАВІША / ТЕКСТ / URL":"KLÁVESA / TEXT / URL", "Немає дії":"Žádná akce", "Натиснути клавішу":"Stisknout klávesu", "Ввести текст":"Napsat text", "Відкрити вебсторінку":"Otevřít web", "Запустити скрипт (шлях до файлу)":"Spustit skript (cesta k souboru)", "ПОШУК РУКИ…":"HLEDÁNÍ RUKY…", "ОЧІКУВАННЯ":"ČEKÁNÍ", "НЕАКТИВНО":"NEAKTIVNÍ", "● ПРАЦЮЄ":"● BĚŽÍ", "КАМЕРУ ЗУПИНЕНО":"KAMERA ZASTAVENA", "Ліва рука":"Levá ruka", "Права рука":"Pravá ruka", "Обидві руки":"Obě ruce",
             "Великий палець угору":"Palec nahoru", "Мізинець":"Malíček", "Один палець":"Jeden prst", "Два пальці":"Dva prsty", "Три пальці":"Tři prsty", "Чотири пальці":"Čtyři prsty", "Відкрита долоня":"Otevřená dlaň", "Кулак":"Pěst",
             "Завантаження моделі…":"Načítání modelu…", "ПОМИЛКА ІНІЦІАЛІЗАЦІЇ":"CHYBA INICIALIZACE"
           }
         }
+        translations["ru"] = {
+            "Керування жестами":"Управление жестами", "Додати скрипт":"Добавить скрипт", "КЕРУВАННЯ ЖЕСТАМИ":"УПРАВЛЕНИЕ ЖЕСТАМИ", "РОЗДІЛИ":"РАЗДЕЛЫ", "Головна":"Главная", "Налаштування":"Настройки", "Прив’язки команд":"Привязки команд", "Мої скрипти":"Мои скрипты",
+            "ЗОБРАЖЕННЯ З КАМЕРИ":"ИЗОБРАЖЕНИЕ С КАМЕРЫ", "КАМЕРУ НЕ ЗАПУЩЕНО\n\nНатисни «Увімкнути камеру»":"КАМЕРА НЕ ЗАПУЩЕНА\n\nНажми «Включить камеру»", "▶  УВІМКНУТИ КАМЕРУ":"▶  ВКЛЮЧИТЬ КАМЕРУ", "■  ЗУПИНИТИ КАМЕРУ":"■  ОСТАНОВИТЬ КАМЕРУ", "РОЗПІЗНАВАННЯ":"РАСПОЗНАВАНИЕ", "ПОТОЧНИЙ ЖЕСТ":"ТЕКУЩИЙ ЖЕСТ", "РУКА":"РУКА", "СТАН ВІДСТЕЖЕННЯ":"СОСТОЯНИЕ ОТСЛЕЖИВАНИЯ", "ОСТАННЯ ДІЯ":"ПОСЛЕДНЕЕ ДЕЙСТВИЕ", "Дій не виконано":"Действий не выполнено", "РОЗПІЗНАВАНІ ЖЕСТИ":"РАСПОЗНАВАЕМЫЕ ЖЕСТЫ",
+            "👍 Великий палець угору\n🤙 Мізинець\n☝ Один палець\n✌ Два пальці\n🤟 Три пальці\n🖖 Чотири пальці\n🖐 Відкрита долоня\n✊ Кулак":"👍 Большой палец вверх\n🤙 Мизинец\n☝ Один палец\n✌ Два пальца\n🤟 Три пальца\n🖖 Четыре пальца\n🖐 Открытая ладонь\n✊ Кулак",
+            "КАМЕРА ТА ВИДИМІСТЬ":"КАМЕРА И ОТОБРАЖЕНИЕ", "Мова інтерфейсу":"Язык интерфейса", "Запускати разом із Windows":"Запускать вместе с Windows", "Пристрій камери":"Устройство камеры", "Роздільна здатність камери":"Разрешение камеры", "1280 × 720 (рекомендовано)":"1280 × 720 (рекомендуется)", "640 × 480 (швидше)":"640 × 480 (быстрее)", "Камера 0":"Камера 0", "Камера 1":"Камера 1", "Камера 2":"Камера 2", "Дзеркально відображати зображення камери":"Зеркально отображать изображение камеры", "Покращення видимості в темряві":"Улучшение видимости в темноте", "Показувати рамки навколо виявлених облич":"Показывать рамки вокруг обнаруженных лиц", "Виконувати жести лише коли обличчя є в кадрі":"Выполнять жесты, только если лицо находится в кадре", "Показувати скелет рук у відео":"Показывать скелет рук на видео", "Виводити оброблене відео у віртуальну камеру (OBS / Discord)":"Передавать обработанное видео в виртуальную камеру (OBS / Discord)", "Утримання зображення руки (секунди)":"Время отображения скелета руки (секунды)", "Гамма":"Гамма", "Яскравість":"Яркость", "Контрастність":"Контрастность", "Зміни зберігаються автоматично":"Изменения сохраняются автоматически", "✓ Усі налаштування автоматично збережено":"✓ Все настройки автоматически сохранены", "КОПІЮВАТИ КОНФІГ У БУФЕР ОБМІНУ":"КОПИРОВАТЬ КОНФИГУРАЦИЮ", "✕ ховає програму в трей. Для виходу натисни правою кнопкою на іконку трея → «Вийти».":"✕ сворачивает программу в трей. Для выхода нажми правой кнопкой по значку трея → «Выход».",
+            "ЖЕСТ":"ЖЕСТ", "ДІЯ":"ДЕЙСТВИЕ", "КЛАВІША / ТЕКСТ / URL":"КЛАВИША / ТЕКСТ / URL", "УТРИМАННЯ (С)":"УДЕРЖАНИЕ (С)", "Немає дії":"Нет действия", "Натиснути клавішу":"Нажать клавишу", "Ввести текст":"Ввести текст", "Відкрити вебсторінку":"Открыть веб-страницу", "Запустити скрипт (шлях до файлу)":"Запустить скрипт (путь к файлу)", "Налаштуй окрему команду для кожної руки. Для прив’язки «Обидві руки» жест має бути показаний одночасно двома руками.":"Настрой отдельную команду для каждой руки. Для привязки «Обе руки» жест должен одновременно распознаваться обеими руками.", "Ліва рука":"Левая рука", "Права рука":"Правая рука", "Обидві руки":"Обе руки", "Великий палець угору":"Большой палец вверх", "Мізинець":"Мизинец", "Один палець":"Один палец", "Два пальці":"Два пальца", "Три пальці":"Три пальца", "Чотири пальці":"Четыре пальца", "Відкрита долоня":"Открытая ладонь", "Кулак":"Кулак",
+            "＋ ДОДАТИ СКРИПТ":"＋ ДОБАВИТЬ СКРИПТ", "▶ ЗАПУСТИТИ ВИБРАНИЙ":"▶ ЗАПУСТИТЬ ВЫБРАННЫЙ", "ВИДАЛИТИ":"УДАЛИТЬ", "МОЇ СКРИПТИ · AHK / EXE / BAT":"МОИ СКРИПТЫ · AHK / EXE / BAT", "Перетягни сюди файли .ahk, .exe, .bat або .cmd":"Перетащи сюда файлы .ahk, .exe, .bat или .cmd", "Додавай власні файли .ahk, .exe, .bat або .cmd. Додані файли зберігаються у конфігурації; їх можна запускати кнопкою або прив’язати до жесту на сторінці «Прив’язки команд».":"Добавляй свои файлы .ahk, .exe, .bat или .cmd. Добавленные файлы сохраняются в конфигурации; их можно запускать кнопкой или привязать к жесту на странице «Привязки команд».", "Для AHK потрібен встановлений AutoHotkey або коректна асоціація .ahk у Windows. Скрипти запускаються від імені поточного користувача.":"Для AHK требуется установленный AutoHotkey или корректная ассоциация файлов .ahk в Windows. Скрипты запускаются от имени текущего пользователя.", "Клавіша / текст / URL або вибери скрипт у списку":"Клавиша / текст / URL или выбери скрипт из списка", "Натисни тут до 3 клавіш: Shift+Q+F":"Нажми здесь до 3 клавиш: Shift+Q+F", "Натисни тут до 3 клавіш. Backspace очищає; Ctrl+Backspace призначає Backspace.":"Нажми здесь до 3 клавиш. Backspace очищает; Ctrl+Backspace назначает Backspace.",
+            "ПОШУК РУКИ…":"ПОИСК РУКИ…", "ЗНАЙДЕНО РУК: ":"НАЙДЕНО РУК: ", "ОЧІКУВАННЯ":"ОЖИДАНИЕ", "НЕАКТИВНО":"НЕАКТИВНО", "● НЕАКТИВНО":"● НЕАКТИВНО", "● ПРАЦЮЄ":"● РАБОТАЕТ", "КАМЕРУ ЗУПИНЕНО":"КАМЕРА ОСТАНОВЛЕНА", "ЗАВАНТАЖЕННЯ МОДЕЛІ…":"ЗАГРУЗКА МОДЕЛИ…", "ПОМИЛКА ІНІЦІАЛІЗАЦІЇ":"ОШИБКА ИНИЦИАЛИЗАЦИИ", "ПОМИЛКА ОБРОБКИ КАДРУ:":"ОШИБКА ОБРАБОТКИ КАДРА:", "ОБЛИЧЧЯ НЕ ВИЯВЛЕНО — ОЧІКУЮ":"ЛИЦО НЕ ОБНАРУЖЕНО — ОЖИДАНИЕ", "Обличчя не виявлено — очікую":"Лицо не обнаружено — ожидание", "ОБЛИЧЧЯ:":"ЛИЦА:", " · ЖЕСТИ АКТИВНІ":" · ЖЕСТЫ АКТИВНЫ", "ЛІВА":"ЛЕВАЯ", "ПРАВА":"ПРАВАЯ", "Запущено скрипт: ":"Запущен скрипт: ", "Помилка виконання прив'язки: ":"Ошибка выполнения привязки: ", "Помилка налаштування детекції обличчя: ":"Ошибка настройки распознавания лиц: ", "Зупинити камеру":"Остановить камеру", "Відкрити":"Открыть", "Згорнути в трей":"Свернуть в трей", "Вийти":"Выход", "Конфіг":"Конфигурация", "Помилка":"Ошибка", "Файл не знайдено: ":"Файл не найден: ", "Не вдалося відкрити камеру. Перевір дозвіл Windows або вибери іншу камеру.":"Не удалось открыть камеру. Проверь разрешения Windows или выбери другую камеру.", "Не вдалося запустити віртуальну камеру StrimerCameraControl. Запусти INSTALL.bat від імені адміністратора або перевстанови драйвер. Деталі: ":"Не удалось запустить виртуальную камеру StrimerCameraControl. Запусти INSTALL.bat от имени администратора или переустанови драйвер. Подробности: ", "Камеру зупинено":"Камера остановлена", "Завершення роботи камери…":"Завершение работы камеры…", "Зачекай завершення зупинки камери…":"Дождись завершения остановки камеры…"
+        }
+        translations["pt"] = {
+            "Керування жестами":"Controle por gestos", "Додати скрипт":"Adicionar script", "КЕРУВАННЯ ЖЕСТАМИ":"CONTROLE POR GESTOS", "РОЗДІЛИ":"SEÇÕES", "Головна":"Início", "Налаштування":"Configurações", "Прив’язки команд":"Atribuições de comandos", "Мої скрипти":"Meus scripts",
+            "ЗОБРАЖЕННЯ З КАМЕРИ":"PRÉVIA DA CÂMERA", "КАМЕРУ НЕ ЗАПУЩЕНО\n\nНатисни «Увімкнути камеру»":"CÂMERA NÃO INICIADA\n\nClique em “Iniciar câmera”", "▶  УВІМКНУТИ КАМЕРУ":"▶  INICIAR CÂMERA", "■  ЗУПИНИТИ КАМЕРУ":"■  PARAR CÂMERA", "РОЗПІЗНАВАННЯ":"RECONHECIMENTO", "ПОТОЧНИЙ ЖЕСТ":"GESTO ATUAL", "РУКА":"MÃO", "СТАН ВІДСТЕЖЕННЯ":"STATUS DO RASTREAMENTO", "ОСТАННЯ ДІЯ":"ÚLTIMA AÇÃO", "Дій не виконано":"Nenhuma ação executada", "РОЗПІЗНАВАНІ ЖЕСТИ":"GESTOS RECONHECIDOS",
+            "👍 Великий палець угору\n🤙 Мізинець\n☝ Один палець\n✌ Два пальці\n🤟 Три пальці\n🖖 Чотири пальці\n🖐 Відкрита долоня\n✊ Кулак":"👍 Polegar para cima\n🤙 Dedo mínimo\n☝ Um dedo\n✌ Dois dedos\n🤟 Três dedos\n🖖 Quatro dedos\n🖐 Palma aberta\n✊ Punho",
+            "КАМЕРА ТА ВИДИМІСТЬ":"CÂMERA E VISUALIZAÇÃO", "Мова інтерфейсу":"Idioma da interface", "Запускати разом із Windows":"Iniciar com o Windows", "Пристрій камери":"Dispositivo da câmera", "Роздільна здатність камери":"Resolução da câmera", "1280 × 720 (рекомендовано)":"1280 × 720 (recomendado)", "640 × 480 (швидше)":"640 × 480 (mais rápido)", "Камера 0":"Câmera 0", "Камера 1":"Câmera 1", "Камера 2":"Câmera 2", "Дзеркально відображати зображення камери":"Espelhar imagem da câmera", "Покращення видимості в темряві":"Melhorar visibilidade em pouca luz", "Показувати рамки навколо виявлених облич":"Mostrar molduras nos rostos detectados", "Виконувати жести лише коли обличчя є в кадрі":"Reconhecer gestos somente quando houver um rosto no enquadramento", "Показувати скелет рук у відео":"Mostrar o esqueleto das mãos no vídeo", "Виводити оброблене відео у віртуальну камеру (OBS / Discord)":"Enviar vídeo processado para a câmera virtual (OBS / Discord)", "Утримання зображення руки (секунди)":"Duração da exibição do esqueleto da mão (segundos)", "Гамма":"Gama", "Яскравість":"Brilho", "Контрастність":"Contraste", "Зміни зберігаються автоматично":"As alterações são salvas automaticamente", "✓ Усі налаштування автоматично збережено":"✓ Todas as configurações foram salvas automaticamente", "КОПІЮВАТИ КОНФІГ У БУФЕР ОБМІНУ":"COPIAR CONFIGURAÇÃO", "✕ ховає програму в трей. Для виходу натисни правою кнопкою на іконку трея → «Вийти».":"✕ minimiza o aplicativo para a bandeja. Para sair, clique com o botão direito no ícone da bandeja → “Sair”.",
+            "ЖЕСТ":"GESTO", "ДІЯ":"AÇÃO", "КЛАВІША / ТЕКСТ / URL":"TECLA / TEXTO / URL", "УТРИМАННЯ (С)":"DURAÇÃO (S)", "Немає дії":"Nenhuma ação", "Натиснути клавішу":"Pressionar tecla", "Ввести текст":"Digitar texto", "Відкрити вебсторінку":"Abrir página da web", "Запустити скрипт (шлях до файлу)":"Executar script (caminho do arquivo)", "Налаштуй окрему команду для кожної руки. Для прив’язки «Обидві руки» жест має бути показаний одночасно двома руками.":"Configure uma ação para cada mão. Para a atribuição “Ambas as mãos”, o gesto deve ser detectado simultaneamente pelas duas mãos.", "Ліва рука":"Mão esquerda", "Права рука":"Mão direita", "Обидві руки":"Ambas as mãos", "Великий палець угору":"Polegar para cima", "Мізинець":"Dedo mínimo", "Один палець":"Um dedo", "Два пальці":"Dois dedos", "Три пальці":"Três dedos", "Чотири пальці":"Quatro dedos", "Відкрита долоня":"Palma aberta", "Кулак":"Punho",
+            "＋ ДОДАТИ СКРИПТ":"＋ ADICIONAR SCRIPT", "▶ ЗАПУСТИТИ ВИБРАНИЙ":"▶ EXECUTAR SELECIONADO", "ВИДАЛИТИ":"REMOVER", "МОЇ СКРИПТИ · AHK / EXE / BAT":"MEUS SCRIPTS · AHK / EXE / BAT", "Перетягни сюди файли .ahk, .exe, .bat або .cmd":"Arraste arquivos .ahk, .exe, .bat ou .cmd para cá", "Додавай власні файли .ahk, .exe, .bat або .cmd. Додані файли зберігаються у конфігурації; їх можна запускати кнопкою або прив’язати до жесту на сторінці «Прив’язки команд».":"Adicione seus próprios arquivos .ahk, .exe, .bat ou .cmd. Os arquivos adicionados ficam salvos na configuração e podem ser executados pelo botão ou atribuídos a um gesto na página “Atribuições de comandos”.", "Для AHK потрібен встановлений AutoHotkey або коректна асоціація .ahk у Windows. Скрипти запускаються від імені поточного користувача.":"Para arquivos AHK, é necessário instalar o AutoHotkey ou ter uma associação .ahk válida no Windows. Os scripts são executados como o usuário atual.", "Клавіша / текст / URL або вибери скрипт у списку":"Tecla / texto / URL ou selecione um script na lista", "Натисни тут до 3 клавіш: Shift+Q+F":"Clique aqui e pressione até 3 teclas: Shift+Q+F", "Натисни тут до 3 клавіш. Backspace очищає; Ctrl+Backspace призначає Backspace.":"Clique aqui e pressione até 3 teclas. Backspace limpa; Ctrl+Backspace atribui Backspace.",
+            "ПОШУК РУКИ…":"PROCURANDO MÃO…", "ЗНАЙДЕНО РУК: ":"MÃOS DETECTADAS: ", "ОЧІКУВАННЯ":"AGUARDANDO", "НЕАКТИВНО":"INATIVO", "● НЕАКТИВНО":"● INATIVO", "● ПРАЦЮЄ":"● EM EXECUÇÃO", "КАМЕРУ ЗУПИНЕНО":"CÂMERA PARADA", "ЗАВАНТАЖЕННЯ МОДЕЛІ…":"CARREGANDO MODELO…", "ПОМИЛКА ІНІЦІАЛІЗАЦІЇ":"ERRO DE INICIALIZAÇÃO", "ПОМИЛКА ОБРОБКИ КАДРУ:":"ERRO AO PROCESSAR QUADRO:", "ОБЛИЧЧЯ НЕ ВИЯВЛЕНО — ОЧІКУЮ":"ROSTO NÃO DETECTADO — AGUARDANDO", "Обличчя не виявлено — очікую":"Rosto não detectado — aguardando", "ОБЛИЧЧЯ:":"ROSTOS:", " · ЖЕСТИ АКТИВНІ":" · GESTOS ATIVOS", "ЛІВА":"ESQUERDA", "ПРАВА":"DIREITA", "Запущено скрипт: ":"Script iniciado: ", "Помилка виконання прив'язки: ":"Erro ao executar atribuição: ", "Помилка налаштування детекції обличчя: ":"Erro ao configurar a detecção facial: ", "Зупинити камеру":"Parar câmera", "Відкрити":"Abrir", "Згорнути в трей":"Minimizar para a bandeja", "Вийти":"Sair", "Конфіг":"Configuração", "Помилка":"Erro", "Файл не знайдено: ":"Arquivo não encontrado: ", "Не вдалося відкрити камеру. Перевір дозвіл Windows або вибери іншу камеру.":"Não foi possível abrir a câmera. Verifique as permissões do Windows ou selecione outra câmera.", "Не вдалося запустити віртуальну камеру StrimerCameraControl. Запусти INSTALL.bat від імені адміністратора або перевстанови драйвер. Деталі: ":"Não foi possível iniciar a câmera virtual StrimerCameraControl. Execute INSTALL.bat como administrador ou reinstale o driver. Detalhes: ", "Камеру зупинено":"Câmera parada", "Завершення роботи камери…":"Finalizando a câmera…", "Зачекай завершення зупинки камери…":"Aguarde a câmera terminar de parar…"
+        }
+        # Complete the Czech UI for controls and runtime status messages.
+        translations["cs"].update({
+            "Зміни зберігаються автоматично":"Změny se ukládají automaticky", "✓ Усі налаштування автоматично збережено":"✓ Všechna nastavení byla automaticky uložena", "МОЇ СКРИПТИ · AHK / EXE / BAT":"MOJE SKRIPTY · AHK / EXE / BAT", "＋ ДОДАТИ СКРИПТ":"＋ PŘIDAT SKRIPT", "▶ ЗАПУСТИТИ ВИБРАНИЙ":"▶ SPUSTIT VYBRANÝ", "ВИДАЛИТИ":"ODEBRAT", "Перетягни сюди файли .ahk, .exe, .bat або .cmd":"Sem přetáhněte soubory .ahk, .exe, .bat nebo .cmd", "Зміни зберігаються автоматично":"Změny se ukládají automaticky", "Дій не виконано":"Žádná akce nebyla provedena", "ЗНАЙДЕНО РУК: ":"NALEZENÉ RUCE: ", "ЗАВАНТАЖЕННЯ МОДЕЛІ…":"NAČÍTÁNÍ MODELU…", "ПОМИЛКА ОБРОБКИ КАДРУ:":"CHYBA ZPRACOVÁNÍ SNÍMKU:", "ПОШУК РУКИ…":"HLEDÁNÍ RUKY…", "ОБЛИЧЧЯ НЕ ВИЯВЛЕНО — ОЧІКУЮ":"TVÁŘ NENALEZENA — ČEKÁM", "ЛІВА":"LEVÁ", "ПРАВА":"PRAVÁ", "Зупинити камеру":"Zastavit kameru", "Відкрити":"Otevřít", "Згорнути в трей":"Minimalizovat do oznamovací oblasti", "Вийти":"Ukončit", "Конфіг":"Konfigurace", "Не вдалося відкрити камеру. Перевір дозвіл Windows або вибери іншу камеру.":"Kameru nelze otevřít. Zkontrolujte oprávnění Windows nebo vyberte jinou kameru.", "Камеру зупинено":"Kamera zastavena", "Завершення роботи камери…":"Ukončování kamery…", "Зачекай завершення зупинки камери…":"Počkejte na dokončení zastavování kamery…", "Помилка":"Chyba", "Файл не знайдено: ":"Soubor nebyl nalezen: ", "ЗБЕРЕГТИ НАЛАШТУВАННЯ":"ULOŽIT NASTAVENÍ", "Виявляти обличчя та показувати рамки":"Detekovat obličeje a zobrazit rámečky", "Показувати скелет рук у відео":"Zobrazit kostru rukou ve videu", "Виводити оброблене відео у віртуальну камеру (OBS / Discord)":"Odesílat zpracované video do virtuální kamery (OBS / Discord)", "Утримання зображення руки (секунди)":"Doba zobrazení kostry ruky (sekundy)", "Покращення видимості в темряві":"Zlepšení viditelnosti při slabém osvětlení", "Зміни зберігаються автоматично":"Změny se ukládají automaticky", "✓ Прив’язки автоматично збережено":"✓ Přiřazení byla automaticky uložena", "Прив’язки зберігаються автоматично":"Přiřazení se ukládají automaticky", "Підтримуються AHK, EXE, BAT, CMD":"Podporováno: AHK, EXE, BAT, CMD", "Натисни тут до 3 клавіш: Shift+Q+F":"Klikněte sem a stiskněte až 3 klávesy: Shift+Q+F", "Клавіша / текст / URL або вибери скрипт у списку":"Klávesa / text / URL nebo vyberte skript ze seznamu", "Оброблене відео надсилається у віртуальну камеру StrimerCameraControl. У OBS та Discord вибери цей пристрій; фізичну камеру використовує ця програма.":"Zpracované video se odesílá do virtuální kamery StrimerCameraControl. V OBS a Discordu vyberte toto zařízení; fyzickou kameru používá tato aplikace.", "Конфігурацію скопійовано в буфер обміну.":"Konfigurace byla zkopírována do schránky.", "Не вдалося скопіювати конфігурацію: ":"Konfiguraci se nepodařilo zkopírovat: ", "Не вдалося змінити автозапуск: ":"Nepodařilo se změnit automatické spouštění: "})
+
         mapping=translations.get(lang,{})
+        self._active_mapping = mapping
+        self.setWindowTitle(mapping.get("Керування жестами", "Керування жестами"))
+        for spin in self.findChildren(QDoubleSpinBox):
+            if spin.suffix() in (" с", " s"):
+                spin.setSuffix(" s" if lang == "en" else (" s" if lang == "cs" else " с"))
         for widget in self.findChildren(QLabel)+self.findChildren(QPushButton)+self.findChildren(QCheckBox):
             original=widget.property("gc_original_text")
             if original is None:
                 original=widget.text(); widget.setProperty("gc_original_text",original)
             widget.setText(mapping.get(original, original))
+        for edit in self.findChildren(QLineEdit):
+            original=edit.property("gc_original_placeholder")
+            if original is None:
+                original=edit.placeholderText(); edit.setProperty("gc_original_placeholder", original)
+            edit.setPlaceholderText(mapping.get(original, original))
+        for widget in self.findChildren(QListWidget):
+            original=widget.property("gc_original_tooltip")
+            if original is None:
+                original=widget.toolTip(); widget.setProperty("gc_original_tooltip", original)
+            widget.setToolTip(mapping.get(original, original))
         for combo in self.findChildren(QComboBox):
             if combo is self.language: continue
             for i in range(combo.count()):
@@ -468,20 +637,33 @@ class Main(QMainWindow):
                 item.setText(mapping.get(original, original))
         if hasattr(self,"start"):
             self.start.setText(mapping.get("▶  УВІМКНУТИ КАМЕРУ" if not self.active else "■  ЗУПИНИТИ КАМЕРУ", "▶  УВІМКНУТИ КАМЕРУ" if not self.active else "■  ЗУПИНИТИ КАМЕРУ"))
+        if hasattr(self, "tray"):
+            self.tray.setToolTip(mapping.get("Керування жестами", "Керування жестами"))
+        if hasattr(self, "tray_menu"):
+            for action, original in ((self.tray_show,"Відкрити"),(self.tray_hide,"Згорнути в трей"),(self.tray_stop,"Зупинити камеру"),(self.tray_quit,"Вийти")):
+                action.setText(mapping.get(original, original))
+
+    def tr(self, text):
+        return getattr(self, "_active_mapping", {}).get(text, text)
 
     def setup_tray(self):
         self.tray=QSystemTrayIcon(self); self.tray.setIcon(self.style().standardIcon(QStyle.SP_ComputerIcon)); self.tray.setToolTip("Керування жестами")
-        menu=QMenu(); show=QAction("Відкрити",self); show.triggered.connect(self.restore_window); menu.addAction(show)
-        hide=QAction("Згорнути в трей",self); hide.triggered.connect(self.hide); menu.addAction(hide); menu.addSeparator()
-        quit_action=QAction("Вийти",self); quit_action.triggered.connect(self.quit_app); menu.addAction(quit_action)
-        self.tray.setContextMenu(menu); self.tray.activated.connect(self.tray_activated); self.tray.show()
+        self.tray_menu=QMenu(); self.tray_show=QAction("Відкрити",self); self.tray_show.triggered.connect(self.restore_window); self.tray_menu.addAction(self.tray_show)
+        self.tray_hide=QAction("Згорнути в трей",self); self.tray_hide.triggered.connect(self.hide); self.tray_menu.addAction(self.tray_hide)
+        self.tray_stop=QAction("Зупинити камеру",self); self.tray_stop.triggered.connect(self.stop_camera); self.tray_menu.addAction(self.tray_stop)
+        self.tray_menu.addSeparator(); self.tray_quit=QAction("Вийти",self); self.tray_quit.triggered.connect(self.quit_app); self.tray_menu.addAction(self.tray_quit)
+        self.tray.setContextMenu(self.tray_menu); self.tray.activated.connect(self.tray_activated); self.tray.show()
+        self.apply_language()
     def tray_activated(self,reason):
         if reason in (QSystemTrayIcon.Trigger,QSystemTrayIcon.DoubleClick): self.restore_window()
     def restore_window(self): self.showNormal(); self.raise_(); self.activateWindow()
     def quit_app(self):
-        self.allow_quit=True; self.tray.hide(); self.stop_camera()
-        if self.tracker: self.tracker.close()
-        if self.face_detector: self.face_detector.close()
+        self.allow_quit=True
+        self.tray.hide()
+        self.stop_camera()
+        thread = self._shutdown_thread
+        if thread is not None:
+            thread.join(timeout=2.0)
         QApplication.quit()
 
     def save(self):
@@ -495,7 +677,7 @@ class Main(QMainWindow):
                             "night_vision":self.night.isChecked(),
                             "gamma":self.gamma[1].value()/10,
                             "brightness":self.brightness[1].value(),
-                            "contrast":self.contrast[1].value()/10,"language":self.language.currentData(),"face_presence_gate":self.face_gate.isChecked(),"face_tracking_enabled":self.face_tracking.isChecked(), "hand_overlay_hold_seconds":self.hand_overlay_hold.value()})
+                            "contrast":self.contrast[1].value()/10,"language":self.language.currentData(),"mirror_camera":self.mirror_camera.isChecked(),"face_presence_gate":self.face_gate.isChecked(),"face_tracking_enabled":self.face_tracking.isChecked(), "hand_overlay_enabled":self.hand_overlay.isChecked(), "virtual_camera_enabled":self.virtual_camera_enabled.isChecked(), "hand_overlay_hold_seconds":self.hand_overlay_hold.value()})
             current["bindings"] = {}
             for key,(action,target,hold) in self.binding_widgets.items():
                 selected=action.currentData()
@@ -504,9 +686,9 @@ class Main(QMainWindow):
                 else:
                     current["bindings"][key]={"action":selected,"target":target.text().strip(),"hold_seconds":hold.value()}
             QApplication.clipboard().setText(json.dumps(current, indent=2, ensure_ascii=False))
-            QMessageBox.information(self, "Конфіг", "Конфігурацію скопійовано в буфер обміну.")
+            QMessageBox.information(self, self.tr("Конфіг"), self.tr("Конфігурацію скопійовано в буфер обміну."))
         except Exception as e:
-            QMessageBox.warning(self, "Помилка", f"Не вдалося скопіювати конфігурацію: {e}")
+            QMessageBox.warning(self, self.tr("Помилка"), self.tr("Не вдалося скопіювати конфігурацію: ")+str(e))
 
     def save_bindings(self):
         self.save_config_silent()
@@ -526,22 +708,62 @@ class Main(QMainWindow):
                 self.face_detector=None
                 self.face_history.clear()
         except Exception as e:
-            self.event.setText("Помилка налаштування детекції обличчя: "+str(e))
+            self.event.setText(self.tr("Помилка налаштування детекції обличчя: ")+str(e))
 
     def stop_camera(self):
+        """Stop the capture loop immediately; release native resources off the UI thread."""
         self.timer.stop()
-        if self.cap: self.cap.release()
-        self.cap=None; self.active=False
-        if self.tracker:
-            self.tracker.close(); self.tracker=None
-        if self.face_detector:
-            self.face_detector.close(); self.face_detector=None
-        if hasattr(self,"start"): self.start.setText("▶  УВІМКНУТИ КАМЕРУ")
-        if hasattr(self,"status"): self.status.setText("● НЕАКТИВНО"); self.status.setStyleSheet("color:#ff8094;font-weight:700")
+        cap, virtual_cam = self.cap, self.virtual_cam
+        tracker, face_detector = self.tracker, self.face_detector
+        self.cap = None
+        self.virtual_cam = None
+        self.tracker = None
+        self.face_detector = None
+        self.virtual_camera_size = None
+        self.active = False
+
+        # DirectShow, Unity Capture and MediaPipe may block while releasing native
+        # resources. Never close them synchronously in the Qt GUI thread.
+        resources = (cap, virtual_cam, tracker, face_detector)
+        def release_resources():
+            for resource, method in zip(resources, ("release", "close", "close", "close")):
+                if resource is not None:
+                    try:
+                        getattr(resource, method)()
+                    except Exception:
+                        pass
+        self._shutdown_thread = threading.Thread(target=release_resources, name="CameraShutdown", daemon=True)
+        self._shutdown_thread.start()
+        if hasattr(self,"start"):
+            self.start.setText(self.tr("▶  УВІМКНУТИ КАМЕРУ"))
+            self.start.setEnabled(False)
+        if hasattr(self,"status"):
+            self.status.setText(self.tr("● НЕАКТИВНО")); self.status.setStyleSheet("color:#ff8094;font-weight:700")
+        if hasattr(self,"event"):
+            self.event.setText(self.tr("Завершення роботи камери…"))
+        QTimer.singleShot(100, self._finish_camera_shutdown)
+
+    def _finish_camera_shutdown(self):
+        thread = self._shutdown_thread
+        if thread is not None and thread.is_alive():
+            QTimer.singleShot(100, self._finish_camera_shutdown)
+            return
+        self._shutdown_thread = None
+        if hasattr(self, "start"):
+            self.start.setEnabled(True)
+        if hasattr(self, "event"):
+            self.event.setText(self.tr("Камеру зупинено"))
+
     def toggle(self):
-        if self.active: self.stop_camera(); self.preview.setText("КАМЕРУ ЗУПИНЕНО"); return
+        if self.active:
+            self.stop_camera()
+            self.preview.setText(self.tr("КАМЕРУ ЗУПИНЕНО"))
+            return
+        if self._shutdown_thread is not None and self._shutdown_thread.is_alive():
+            self.event.setText(self.tr("Зачекай завершення зупинки камери…"))
+            return
         try:
-            self.track.setText("ЗАВАНТАЖЕННЯ МОДЕЛІ…"); base=python.BaseOptions(model_asset_path=str(get_model()))
+            self.track.setText(self.tr("ЗАВАНТАЖЕННЯ МОДЕЛІ…")); base=python.BaseOptions(model_asset_path=str(get_model()))
             opts=vision.HandLandmarkerOptions(
                 base_options=base, running_mode=vision.RunningMode.VIDEO, num_hands=2,
                 min_hand_detection_confidence=0.42,
@@ -561,32 +783,45 @@ class Main(QMainWindow):
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT,height)
             self.cap.set(cv2.CAP_PROP_FPS,30)
             self.cap.set(cv2.CAP_PROP_BUFFERSIZE,1)
-            if not self.cap.isOpened(): raise RuntimeError("Не вдалося відкрити камеру. Перевір дозвіл Windows або вибери іншу камеру.")
-            self.face_history.clear(); self.last_hand_overlay=None; self.active=True; self.start.setText("■  ЗУПИНИТИ КАМЕРУ"); self.status.setText("● ПРАЦЮЄ"); self.status.setStyleSheet("color:#63f2b2;font-weight:700"); self.timer.start(25)
+            if not self.cap.isOpened(): raise RuntimeError(self.tr("Не вдалося відкрити камеру. Перевір дозвіл Windows або вибери іншу камеру."))
+            if self.virtual_camera_enabled.isChecked():
+                try:
+                    import pyvirtualcam
+                    self.virtual_camera_size = (width, height)
+                    self.virtual_frames_sent = 0
+                    self.virtual_cam = pyvirtualcam.Camera(width=width, height=height, fps=30, fmt=pyvirtualcam.PixelFormat.RGB, backend="unitycapture")
+                    self.event.setText(f"StrimerCameraControl: {self.virtual_cam.device} · {width}×{height} RGB")
+                except Exception as vc_error:
+                    raise RuntimeError(self.tr("Не вдалося запустити віртуальну камеру StrimerCameraControl. Запусти INSTALL.bat від імені адміністратора або перевстанови драйвер. Деталі: ") + str(vc_error))
+            self.face_history.clear(); self.last_hand_overlay=None; self.active=True; self.start.setText(self.tr("■  ЗУПИНИТИ КАМЕРУ")); self.status.setText(self.tr("● ПРАЦЮЄ")); self.status.setStyleSheet("color:#63f2b2;font-weight:700"); self.timer.start(25)
         except Exception as e:
             if self.cap: self.cap.release()
-            self.cap=None; QMessageBox.critical(self,"Помилка запуску камери",str(e)); self.track.setText("ПОМИЛКА ІНІЦІАЛІЗАЦІЇ")
+            self.cap=None
+            if self.virtual_cam is not None:
+                try: self.virtual_cam.close()
+                except Exception: pass
+                self.virtual_cam=None
+            self.virtual_camera_size=None
+            QMessageBox.critical(self,self.tr("Помилка запуску камери"),str(e)); self.track.setText(self.tr("ПОМИЛКА ІНІЦІАЛІЗАЦІЇ"))
 
     def frame(self):
         try:
             self._frame_impl()
         except Exception as e:
             self.timer.stop()
-            self.track.setText("ПОМИЛКА ОБРОБКИ КАДРУ: "+str(e))
-            self.event.setText("Камеру зупинено через помилку, щоб уникнути зависання.")
-            if self.cap: self.cap.release()
-            self.cap=None; self.active=False
-            if self.tracker: self.tracker.close(); self.tracker=None
-            if self.face_detector: self.face_detector.close(); self.face_detector=None
-            self.start.setText("▶  УВІМКНУТИ КАМЕРУ")
-            self.status.setText("● ПОМИЛКА")
+            self.track.setText(self.tr("ПОМИЛКА ОБРОБКИ КАДРУ: ")+str(e))
+            self.event.setText(self.tr("Камеру зупинено через помилку, щоб уникнути зависання."))
+            self.stop_camera()
+            self.start.setText(self.tr("▶  УВІМКНУТИ КАМЕРУ"))
+            self.status.setText(self.tr("● ПОМИЛКА"))
             self.status.setStyleSheet("color:#ff8094;font-weight:700")
 
     def _frame_impl(self):
         if self.cap is None or self.tracker is None: return
         ok,frame=self.cap.read()
-        if not ok: self.track.setText("НЕМАЄ КАДРУ З КАМЕРИ"); return
-        frame=cv2.flip(frame,1)
+        if not ok: self.track.setText(self.tr("НЕМАЄ КАДРУ З КАМЕРИ")); return
+        if self.cfg.get("mirror_camera", True):
+            frame=cv2.flip(frame,1)
         if self.cfg.get("night_vision",False):
             gamma=max(.1,float(self.cfg.get("gamma",1.5))); lut=np.array([(i/255.0)**(1.0/gamma)*255 for i in range(256)],dtype="uint8")
             frame=cv2.LUT(frame,lut); frame=cv2.convertScaleAbs(frame,alpha=float(self.cfg.get("contrast",1.25)),beta=int(self.cfg.get("brightness",12)))
@@ -656,7 +891,8 @@ class Main(QMainWindow):
             stamp, cached = self.last_hand_overlay
             if time.monotonic() - stamp <= float(self.cfg.get("hand_overlay_hold_seconds", 0.5)):
                 overlay_items = cached
-        for pts,side,g in overlay_items:
+        if self.hand_overlay.isChecked():
+          for pts,side,g in overlay_items:
             for a,b in LINKS:
                 cv2.line(frame,pts[a],pts[b],(175,185,190),2,cv2.LINE_AA)
             for j,(x,y) in enumerate(pts):
@@ -668,23 +904,50 @@ class Main(QMainWindow):
                     cv2.circle(frame,(x,y),9,(245,245,245),1,cv2.LINE_AA)
                 else:
                     cv2.circle(frame,(x,y),3,(225,230,235),-1,cv2.LINE_AA)
-            cv2.putText(frame,f"{'ЛІВА' if side=='LEFT' else 'ПРАВА'}: {GESTURES.get(g,g)}",
+            cv2.putText(frame,f"{self.tr('ЛІВА' if side=='LEFT' else 'ПРАВА')}: {self.tr(GESTURES.get(g,g))}",
                         (max(8,pts[0][0]-40),max(24,pts[0][1]-18)),
                         cv2.FONT_HERSHEY_SIMPLEX,.48,(80,230,255),1,cv2.LINE_AA)
-        self.track.setText("ЗНАЙДЕНО РУК: "+str(len(result.hand_landmarks)) if result.hand_landmarks else "ПОШУК РУКИ…")
+        self.track.setText(self.tr("ЗНАЙДЕНО РУК: ")+str(len(result.hand_landmarks)) if result.hand_landmarks else self.tr("ПОШУК РУКИ…"))
         if self.face_gate.isChecked() and not face_present:
             detected = {}
-            self.track.setText("ОБЛИЧЧЯ НЕ ВИЯВЛЕНО — ОЧІКУЮ")
+            self.track.setText(self.tr("ОБЛИЧЧЯ НЕ ВИЯВЛЕНО — ОЧІКУЮ"))
         elif self.face_detector is not None and face_present:
-            self.track.setText("ОБЛИЧЧЯ: "+str(len(face_result.detections))+" · ЖЕСТИ АКТИВНІ")
+            self.track.setText(self.tr("ОБЛИЧЧЯ:")+" "+str(len(face_result.detections))+self.tr(" · ЖЕСТИ АКТИВНІ"))
         self.process_detected(detected)
         if detected:
-            self.handval.setText(" · ".join(HANDS[k] for k in detected)); self.gval.setText(" / ".join(GESTURES.get(v,v) for v in detected.values()))
+            self.handval.setText(" · ".join(self.tr(HANDS[k]) for k in detected)); self.gval.setText(" / ".join(self.tr(GESTURES.get(v,v)) for v in detected.values()))
         else: self.handval.setText("—"); self.gval.setText("—")
         # Важливо: показуємо RGB, а не BGR — це прибирає синій відтінок.
         display=cv2.cvtColor(frame,cv2.COLOR_BGR2RGB); hh,ww,ch=display.shape
+        if self.virtual_cam is not None:
+            self._send_virtual_frame(display)
         q=QImage(display.data,ww,hh,ch*ww,QImage.Format_RGB888)
-        self.preview.setPixmap(QPixmap.fromImage(q.copy()).scaled(self.preview.size(),Qt.KeepAspectRatio,Qt.FastTransformation))
+        if self.isVisible():
+            self.preview.setPixmap(QPixmap.fromImage(q.copy()).scaled(self.preview.size(),Qt.KeepAspectRatio,Qt.FastTransformation))
+
+    def _send_virtual_frame(self, rgb_frame):
+        """Send one valid, contiguous RGB uint8 frame at the exact Unity Capture size."""
+        if self.virtual_cam is None:
+            return
+        if self.virtual_camera_size is None:
+            raise RuntimeError("Virtual camera output size is not initialized")
+        out_w, out_h = self.virtual_camera_size
+        if rgb_frame is None or rgb_frame.ndim != 3 or rgb_frame.shape[2] != 3:
+            raise ValueError("Virtual camera expects an RGB image with 3 channels")
+        if rgb_frame.dtype != np.uint8:
+            rgb_frame = np.clip(rgb_frame, 0, 255).astype(np.uint8)
+        if rgb_frame.shape[1] != out_w or rgb_frame.shape[0] != out_h:
+            rgb_frame = cv2.resize(rgb_frame, (out_w, out_h), interpolation=cv2.INTER_AREA)
+        # pyvirtualcam expects H×W×3 uint8 RGB; make the buffer contiguous explicitly.
+        rgb_frame = np.ascontiguousarray(rgb_frame, dtype=np.uint8)
+        # Unity Capture needs a paced frame producer. send() transfers the RGB
+        # buffer; sleep_until_next_frame() keeps the stream alive at the device FPS
+        # instead of letting the UI timer overrun the capture filter.
+        self.virtual_cam.send(rgb_frame)
+        self.virtual_cam.sleep_until_next_frame()
+        self.virtual_frames_sent += 1
+        if self.virtual_frames_sent == 1 or self.virtual_frames_sent % 30 == 0:
+            self.event.setText(f"StrimerCameraControl: {self.virtual_cam.device} · {self.virtual_frames_sent} frames sent")
 
     def process_detected(self,detected):
         """Виконує прив'язку лише після стабільного жесту; одна дія на одне утримання."""
@@ -735,23 +998,21 @@ class Main(QMainWindow):
                     if sys.platform == "win32": os.startfile(url)
                     else:
                         opened = webbrowser.open(url, new=2)
-                        if not opened: raise RuntimeError("Не вдалося відкрити посилання у браузері за замовчуванням.")
+                        if not opened: raise RuntimeError(self.tr("Не вдалося відкрити посилання у браузері за замовчуванням."))
                 elif action=="script":
                     self.launch_script_path(target)
                 else:
                     continue
                 self.last_actions[key]=now
                 self.fired_gestures.add(key)
-                self.event.setText(f"{HANDS[side]} · {GESTURES.get(g,g)} → виконано: {action} ({target})")
+                self.event.setText(f"{self.tr(HANDS[side])} · {self.tr(GESTURES.get(g,g))}{self.tr(' → виконано: ')}{action} ({target})")
             except Exception as e:
                 self.fired_gestures.add(key)
-                self.event.setText("Помилка виконання прив'язки: "+str(e))
+                self.event.setText(self.tr("Помилка виконання прив'язки: ")+str(e))
 
     def closeEvent(self,event):
         if self.allow_quit:
             self.stop_camera()
-            if self.tracker: self.tracker.close()
-            if self.face_detector: self.face_detector.close()
             event.accept()
         else:
             event.ignore(); self.hide()
