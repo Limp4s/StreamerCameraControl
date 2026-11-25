@@ -214,6 +214,12 @@ class NoWheelComboBox(QComboBox):
             event.ignore()
 
 
+class NoWheelSlider(QSlider):
+    """Не змінює значення повзунка від прокручування коліщатка миші."""
+    def wheelEvent(self, event):
+        event.ignore()
+
+
 class Main(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -539,7 +545,7 @@ class Main(QMainWindow):
         except Exception as e: QMessageBox.warning(self,self.tr("Не вдалося запустити"),str(e))
 
     def make_slider(self,minimum,maximum,value,fmt,divisor):
-        row=QWidget(); lay=QHBoxLayout(row); lay.setContentsMargins(0,0,0,0); slider=QSlider(Qt.Horizontal); slider.setRange(minimum,maximum); slider.setValue(max(minimum,min(maximum,value)))
+        row=QWidget(); lay=QHBoxLayout(row); lay.setContentsMargins(0,0,0,0); slider=NoWheelSlider(Qt.Horizontal); slider.setRange(minimum,maximum); slider.setValue(max(minimum,min(maximum,value)))
         label=QLabel(fmt.format(slider.value()/divisor)); label.setMinimumWidth(42); label.setAlignment(Qt.AlignRight|Qt.AlignVCenter)
         slider.valueChanged.connect(lambda v,lab=label,f=fmt,d=divisor:lab.setText(f.format(v/d))); lay.addWidget(slider,1); lay.addWidget(label); return row,slider
 
@@ -620,7 +626,51 @@ class Main(QMainWindow):
             "КАМЕРА ТА ВИДИМІСТЬ":"КАМЕРА И ОТОБРАЖЕНИЕ", "Мова інтерфейсу":"Язык интерфейса", "Запускати разом із Windows":"Запускать вместе с Windows", "Пристрій камери":"Устройство камеры", "Роздільна здатність камери":"Разрешение камеры", "1280 × 720 (рекомендовано)":"1280 × 720 (рекомендуется)", "640 × 480 (швидше)":"640 × 480 (быстрее)", "Камера 0":"Камера 0", "Камера 1":"Камера 1", "Камера 2":"Камера 2", "Дзеркально відображати зображення камери":"Зеркально отображать изображение камеры", "Покращення видимості в темряві":"Улучшение видимости в темноте", "Показувати рамки навколо виявлених облич":"Показывать рамки вокруг обнаруженных лиц", "Виконувати жести лише коли обличчя є в кадрі":"Выполнять жесты, только если лицо находится в кадре", "Показувати скелет рук у відео":"Показывать скелет рук на видео", "Виводити оброблене відео у віртуальну камеру (OBS / Discord)":"Передавать обработанное видео в виртуальную камеру (OBS / Discord)", "Утримання зображення руки (секунди)":"Время отображения скелета руки (секунды)", "Гамма":"Гамма", "Яскравість":"Яркость", "Контрастність":"Контрастность", "Зміни зберігаються автоматично":"Изменения сохраняются автоматически", "✓ Усі налаштування автоматично збережено":"✓ Все настройки автоматически сохранены", "КОПІЮВАТИ КОНФІГ У БУФЕР ОБМІНУ":"КОПИРОВАТЬ КОНФИГУРАЦИЮ", "✕ ховає програму в трей. Для виходу натисни правою кнопкою на іконку трея → «Вийти».":"✕ сворачивает программу в трей. Для выхода нажми правой кнопкой по значку трея → «Выход».",
             "ЖЕСТ":"ЖЕСТ", "ДІЯ":"ДЕЙСТВИЕ", "КЛАВІША / ТЕКСТ / URL":"КЛАВИША / ТЕКСТ / URL", "УТРИМАННЯ (С)":"УДЕРЖАНИЕ (С)", "Немає дії":"Нет действия", "Натиснути клавішу":"Нажать клавишу", "Ввести текст":"Ввести текст", "Відкрити вебсторінку":"Открыть веб-страницу", "Запустити скрипт (шлях до файлу)":"Запустить скрипт (путь к файлу)", "Налаштуй окрему команду для кожної руки. Для прив’язки «Обидві руки» жест має бути показаний одночасно двома руками.":"Настрой отдельную команду для каждой руки. Для привязки «Обе руки» жест должен одновременно распознаваться обеими руками.", "Ліва рука":"Левая рука", "Права рука":"Правая рука", "Обидві руки":"Обе руки", "Великий палець угору":"Большой палец вверх", "Мізинець":"Мизинец", "Один палець":"Один палец", "Два пальці":"Два пальца", "Три пальці":"Три пальца", "Чотири пальці":"Четыре пальца", "Відкрита долоня":"Открытая ладонь", "Кулак":"Кулак",
             "＋ ДОДАТИ СКРИПТ":"＋ ДОБАВИТЬ СКРИПТ", "▶ ЗАПУСТИТИ ВИБРАНИЙ":"▶ ЗАПУСТИТЬ ВЫБРАННЫЙ", "ВИДАЛИТИ":"УДАЛИТЬ", "МОЇ СКРИПТИ · AHK / EXE / BAT":"МОИ СКРИПТЫ · AHK / EXE / BAT", "Перетягни сюди файли .ahk, .exe, .bat або .cmd":"Перетащи сюда файлы .ahk, .exe, .bat или .cmd", "Додавай власні файли .ahk, .exe, .bat або .cmd. Додані файли зберігаються у конфігурації; їх можна запускати кнопкою або прив’язати до жесту на сторінці «Прив’язки команд».":"Добавляй свои файлы .ahk, .exe, .bat или .cmd. Добавленные файлы сохраняются в конфигурации; их можно запускать кнопкой или привязать к жесту на странице «Привязки команд».", "Для AHK потрібен встановлений AutoHotkey або коректна асоціація .ahk у Windows. Скрипти запускаються від імені поточного користувача.":"Для AHK требуется установленный AutoHotkey или корректная ассоциация файлов .ahk в Windows. Скрипты запускаются от имени текущего пользователя.", "Клавіша / текст / URL або вибери скрипт у списку":"Клавиша / текст / URL или выбери скрипт из списка", "Натисни тут до 3 клавіш: Shift+Q+F":"Нажми здесь до 3 клавиш: Shift+Q+F", "Натисни тут до 3 клавіш. Backspace очищає; Ctrl+Backspace призначає Backspace.":"Нажми здесь до 3 клавиш. Backspace очищает; Ctrl+Backspace назначает Backspace.",
-            "ПОШУК РУКИ…":"ПОИСК РУКИ…", "ЗНАЙДЕНО РУК: ":"НАЙДЕНО РУК: ", "ОЧІКУВАННЯ":"ОЖИДАНИЕ", "НЕАКТИВНО":"НЕАКТИВНО", "● НЕАКТИВНО":"● НЕАКТИВНО", "● ПРАЦЮЄ":"● РАБОТАЕТ", "КАМЕРУ ЗУПИНЕНО":"КАМЕРА ОСТАНОВЛЕНА", "ЗАВАНТАЖЕННЯ МОДЕЛІ…":"ЗАГРУЗКА МОДЕЛИ…", "ПОМИЛКА ІНІЦІАЛІЗАЦІЇ":"ОШИБКА ИНИЦИАЛИЗАЦИИ", "ПОМИЛКА ОБРОБКИ КАДРУ:":"ОШИБКА ОБРАБОТКИ КАДРА:", "ОБЛИЧЧЯ НЕ ВИЯВЛЕНО — ОЧІКУЮ":"ЛИЦО НЕ ОБНАРУЖЕНО — ОЖИДАНИЕ", "Обличчя не виявлено — очікую":"Лицо не обнаружено — ожидание", "ОБЛИЧЧЯ:":"ЛИЦА:", " · ЖЕСТИ АКТИВНІ":" · ЖЕСТЫ АКТИВНЫ", "ЛІВА":"ЛЕВАЯ", "ПРАВА":"ПРАВАЯ", "Запущено скрипт: ":"Запущен скрипт: ", "Помилка виконання прив'язки: ":"Ошибка выполнения привязки: ", "Помилка налаштування детекції обличчя: ":"Ошибка настройки распознавания лиц: ", "Зупинити камеру":"Остановить камеру", "Відкрити":"Открыть", "Згорнути в трей":"Свернуть в трей", "Вийти":"Выход", "Конфіг":"Конфигурация", "Помилка":"Ошибка", "Файл не знайдено: ":"Файл не найден: ", "Не вдалося відкрити камеру. Перевір дозвіл Windows або вибери іншу камеру.":"Не удалось открыть камеру. Проверь разрешения Windows или выбери другую камеру.", "Не вдалося запустити віртуальну камеру Streamer Camera Control. Запусти INSTALL.bat від імені адміністратора або перевстанови драйвер. Деталі: ":"Не удалось запустить виртуальную камеру Streamer Camera Control. Запусти INSTALL.bat от имени администратора или переустанови драйвер. Подробности: ", "Камеру зупинено":"Камера остановлена", "Завершення роботи камери…":"Завершение работы камеры…", "Зачекай завершення зупинки камери…":"Дождись завершения остановки камеры…"
+            "ПОШУК РУКИ…":"ПОИСК РУКИ…", "ЗНАЙДЕНО РУК: ":"НАЙДЕНО РУК: ", "ОЧІКУВАННЯ":"ОЖИДАНИЕ", "НЕАКТИВНО":"НЕАКТИВНО", "● НЕАКТИВНО":"● НЕАКТИВНО", "● ПРАЦЮЄ":"● РАБОТАЕТ", "КАМЕРУ ЗУПИНЕНО":"КАМЕРА ОСТАНОВЛЕНА", "ЗАВАНТАЖЕННЯ МОДЕЛІ…":"ЗАГРУЗКА МОДЕЛИ…", "ПОМИЛКА ІНІЦІАЛІЗАЦІЇ":"ОШИБКА ИНИЦИАЛИЗАЦИИ", "ПОМИЛКА ОБРОБКИ КАДРУ:":"ОШИБКА ОБРАБОТКИ КАДРА:", "ОБЛИЧЧЯ НЕ ВИЯВЛЕНО — ОЧІКУЮ":"ЛИЦО НЕ ОБНАРУЖЕНО — ОЖИДАНИЕ", "Обличчя не виявлено — очікую":"Лицо не обнаружено — ожидание", "ОБЛИЧЧЯ:":"ЛИЦА:", " · ЖЕСТИ АКТИВНІ":" · ЖЕСТЫ АКТИВНЫ", "ЛІВА":"ЛЕВАЯ", "ПРАВА":"ПРАВАЯ", "Запущено скрипт: ":"Запущен скрипт: ", "Помилка виконання прив'язки: ":"Ошибка выполнения привязки: ", "Помилка налаштування детекції обличчя: ":"Ошибка настройки распознавания лиц: ", "Зупинити камеру":"Остановить камеру", "Відкрити":"Открыть", "Згорнути в трей":"Свернуть в трей", "Вийти":"Выход", "Конфіг":"Конфигурация", "Помилка":"Ошибка", "Файл не знайдено: ":"Файл не найден: ", "Не вдалося відкрити камеру. Перевір дозвіл Windows або вибери іншу камеру.":"Не удалось открыть камеру. Проверь разрешения Windows или выбери другую камеру.", "Не вдалося запустити віртуальну камеру Streamer Camera Control. Запусти INSTALL.bat від імені адміністратора або перевстанови драйвер. Деталі: ":"Не удалось запустить виртуальную камеру Streamer Camera Control. Запусти INSTALL.bat от имени администратора или переустанови драйвер. Подробности: ", "Камеру зупинено":"Камера остановлена", "Завершення роботи камери…":"Завершение работы камеры…", "Зачекай завершення зупинки камери…":"Дождись завершения остановки камеры…",
+            "● ПОМИЛКА": "● ОШИБКА",
+            "Автозапуск": "Автозапуск",
+            "Камеру зупинено через помилку, щоб уникнути зависання.": "Камера остановлена из-за ошибки, чтобы избежать зависания.",
+            ". Перевір інтернет-з'єднання. Деталі: ": " . Проверь подключение к интернету. Подробности: ",
+            "ОБИДВІ РУКИ": "ОБЕ РУКИ",
+            "ЗБЕРЕГТИ НАЛАШТУВАННЯ": "СОХРАНИТЬ НАСТРОЙКИ",
+            "Виявляти обличчя та показувати рамки": "Обнаруживать лица и показывать рамки",
+            "ДОДАТИ СКРИПТ": "ДОБАВИТЬ СКРИПТ",
+            "Не вдалося запустити": "Не удалось запустить",
+            "Підтримуються AHK, EXE, BAT, CMD": "Поддерживаются AHK, EXE, BAT, CMD",
+            "Спочатку вибери скрипт зі списку.": "Сначала выбери скрипт из списка.",
+            "Збереження…": "Сохранение…",
+            "ПОМИЛКА": "ОШИБКА",
+            "Запуск AHK/BAT доступний у Windows.": "Запуск AHK/BAT доступен в Windows.",
+            "НЕМАЄ КАДРУ З КАМЕРИ": "НЕТ КАДРА С КАМЕРЫ",
+            "1920 × 1080 (Full HD)": "1920 × 1080 (Full HD)",
+            "Не вдалося скопіювати конфігурацію: ": "Не удалось скопировать конфигурацию: ",
+            "Завантаження моделі…": "Загрузка модели…",
+            "ЛІВА РУКА": "ЛЕВАЯ РУКА",
+            "Знайдено рук: ": "Найдено рук: ",
+            "Зберегти налаштування": "Сохранить настройки",
+            "Focus here, then press up to 3 keys": "Нажми здесь и введи до 3 клавиш",
+            "Є незбережені зміни…": "Есть несохранённые изменения…",
+            "Не вдалося відкрити посилання у браузері за замовчуванням.": "Не удалось открыть ссылку в браузере по умолчанию.",
+            "Не вдалося завантажити модель ": "Не удалось загрузить модель ",
+            "ПРАВА РУКА": "ПРАВАЯ РУКА",
+            "Формат не підтримується": "Формат не поддерживается",
+            "✓ Прив’язки автоматично збережено": "✓ Привязки автоматически сохранены",
+            "Помилка автозбереження: ": "Ошибка автосохранения: ",
+            "Помилка запуску камери": "Ошибка запуска камеры",
+            " байт). Перевір інтернет-з'єднання або доступ до storage.googleapis.com.": " байт). Проверь подключение к интернету или доступ к storage.googleapis.com.",
+            "Пропущено файли: ": "Пропущены файлы: ",
+            "Не вдалося змінити автозапуск: ": "Не удалось изменить автозапуск: ",
+            "Дозволені лише .ahk, .exe, .bat та .cmd": "Разрешены только .ahk, .exe, .bat и .cmd",
+            "Обличчя": "Лицо",
+            "Скрипт: ": "Скрипт: ",
+            "Утримання (с)": "Удержание (с)",
+            "Оброблене відео надсилається у віртуальну камеру Streamer Camera Control. У OBS та Discord вибери цей пристрій; фізичну камеру використовує ця програма.": "Обработанное видео передаётся в виртуальную камеру Streamer Camera Control. В OBS и Discord выбери это устройство; физическую камеру использует это приложение.",
+            "Клавіша / текст / URL": "Клавиша / текст / URL",
+            "ПОМИЛКА ОБРОБКИ КАДРУ: ": "ОШИБКА ОБРАБОТКИ КАДРА: ",
+            " → виконано: ": " → выполнено: ",
+            "ЖЕСТИ АКТИВНІ": "ЖЕСТЫ АКТИВНЫ",
+            "Конфігурацію скопійовано в буфер обміну.": "Конфигурация скопирована в буфер обмена.",
+            "Прив’язки зберігаються автоматично": "Привязки сохраняются автоматически",
         }
         translations["pt"] = {
             "Керування жестами":"Controle por gestos", "Додати скрипт":"Adicionar script", "КЕРУВАННЯ ЖЕСТАМИ":"CONTROLE POR GESTOS", "РОЗДІЛИ":"SEÇÕES", "Головна":"Início", "Налаштування":"Configurações", "Прив’язки команд":"Atribuições de comandos", "Мої скрипти":"Meus scripts",
@@ -629,7 +679,51 @@ class Main(QMainWindow):
             "КАМЕРА ТА ВИДИМІСТЬ":"CÂMERA E VISUALIZAÇÃO", "Мова інтерфейсу":"Idioma da interface", "Запускати разом із Windows":"Iniciar com o Windows", "Пристрій камери":"Dispositivo da câmera", "Роздільна здатність камери":"Resolução da câmera", "1280 × 720 (рекомендовано)":"1280 × 720 (recomendado)", "640 × 480 (швидше)":"640 × 480 (mais rápido)", "Камера 0":"Câmera 0", "Камера 1":"Câmera 1", "Камера 2":"Câmera 2", "Дзеркально відображати зображення камери":"Espelhar imagem da câmera", "Покращення видимості в темряві":"Melhorar visibilidade em pouca luz", "Показувати рамки навколо виявлених облич":"Mostrar molduras nos rostos detectados", "Виконувати жести лише коли обличчя є в кадрі":"Reconhecer gestos somente quando houver um rosto no enquadramento", "Показувати скелет рук у відео":"Mostrar o esqueleto das mãos no vídeo", "Виводити оброблене відео у віртуальну камеру (OBS / Discord)":"Enviar vídeo processado para a câmera virtual (OBS / Discord)", "Утримання зображення руки (секунди)":"Duração da exibição do esqueleto da mão (segundos)", "Гамма":"Gama", "Яскравість":"Brilho", "Контрастність":"Contraste", "Зміни зберігаються автоматично":"As alterações são salvas automaticamente", "✓ Усі налаштування автоматично збережено":"✓ Todas as configurações foram salvas automaticamente", "КОПІЮВАТИ КОНФІГ У БУФЕР ОБМІНУ":"COPIAR CONFIGURAÇÃO", "✕ ховає програму в трей. Для виходу натисни правою кнопкою на іконку трея → «Вийти».":"✕ minimiza o aplicativo para a bandeja. Para sair, clique com o botão direito no ícone da bandeja → “Sair”.",
             "ЖЕСТ":"GESTO", "ДІЯ":"AÇÃO", "КЛАВІША / ТЕКСТ / URL":"TECLA / TEXTO / URL", "УТРИМАННЯ (С)":"DURAÇÃO (S)", "Немає дії":"Nenhuma ação", "Натиснути клавішу":"Pressionar tecla", "Ввести текст":"Digitar texto", "Відкрити вебсторінку":"Abrir página da web", "Запустити скрипт (шлях до файлу)":"Executar script (caminho do arquivo)", "Налаштуй окрему команду для кожної руки. Для прив’язки «Обидві руки» жест має бути показаний одночасно двома руками.":"Configure uma ação para cada mão. Para a atribuição “Ambas as mãos”, o gesto deve ser detectado simultaneamente pelas duas mãos.", "Ліва рука":"Mão esquerda", "Права рука":"Mão direita", "Обидві руки":"Ambas as mãos", "Великий палець угору":"Polegar para cima", "Мізинець":"Dedo mínimo", "Один палець":"Um dedo", "Два пальці":"Dois dedos", "Три пальці":"Três dedos", "Чотири пальці":"Quatro dedos", "Відкрита долоня":"Palma aberta", "Кулак":"Punho",
             "＋ ДОДАТИ СКРИПТ":"＋ ADICIONAR SCRIPT", "▶ ЗАПУСТИТИ ВИБРАНИЙ":"▶ EXECUTAR SELECIONADO", "ВИДАЛИТИ":"REMOVER", "МОЇ СКРИПТИ · AHK / EXE / BAT":"MEUS SCRIPTS · AHK / EXE / BAT", "Перетягни сюди файли .ahk, .exe, .bat або .cmd":"Arraste arquivos .ahk, .exe, .bat ou .cmd para cá", "Додавай власні файли .ahk, .exe, .bat або .cmd. Додані файли зберігаються у конфігурації; їх можна запускати кнопкою або прив’язати до жесту на сторінці «Прив’язки команд».":"Adicione seus próprios arquivos .ahk, .exe, .bat ou .cmd. Os arquivos adicionados ficam salvos na configuração e podem ser executados pelo botão ou atribuídos a um gesto na página “Atribuições de comandos”.", "Для AHK потрібен встановлений AutoHotkey або коректна асоціація .ahk у Windows. Скрипти запускаються від імені поточного користувача.":"Para arquivos AHK, é necessário instalar o AutoHotkey ou ter uma associação .ahk válida no Windows. Os scripts são executados como o usuário atual.", "Клавіша / текст / URL або вибери скрипт у списку":"Tecla / texto / URL ou selecione um script na lista", "Натисни тут до 3 клавіш: Shift+Q+F":"Clique aqui e pressione até 3 teclas: Shift+Q+F", "Натисни тут до 3 клавіш. Backspace очищає; Ctrl+Backspace призначає Backspace.":"Clique aqui e pressione até 3 teclas. Backspace limpa; Ctrl+Backspace atribui Backspace.",
-            "ПОШУК РУКИ…":"PROCURANDO MÃO…", "ЗНАЙДЕНО РУК: ":"MÃOS DETECTADAS: ", "ОЧІКУВАННЯ":"AGUARDANDO", "НЕАКТИВНО":"INATIVO", "● НЕАКТИВНО":"● INATIVO", "● ПРАЦЮЄ":"● EM EXECUÇÃO", "КАМЕРУ ЗУПИНЕНО":"CÂMERA PARADA", "ЗАВАНТАЖЕННЯ МОДЕЛІ…":"CARREGANDO MODELO…", "ПОМИЛКА ІНІЦІАЛІЗАЦІЇ":"ERRO DE INICIALIZAÇÃO", "ПОМИЛКА ОБРОБКИ КАДРУ:":"ERRO AO PROCESSAR QUADRO:", "ОБЛИЧЧЯ НЕ ВИЯВЛЕНО — ОЧІКУЮ":"ROSTO NÃO DETECTADO — AGUARDANDO", "Обличчя не виявлено — очікую":"Rosto não detectado — aguardando", "ОБЛИЧЧЯ:":"ROSTOS:", " · ЖЕСТИ АКТИВНІ":" · GESTOS ATIVOS", "ЛІВА":"ESQUERDA", "ПРАВА":"DIREITA", "Запущено скрипт: ":"Script iniciado: ", "Помилка виконання прив'язки: ":"Erro ao executar atribuição: ", "Помилка налаштування детекції обличчя: ":"Erro ao configurar a detecção facial: ", "Зупинити камеру":"Parar câmera", "Відкрити":"Abrir", "Згорнути в трей":"Minimizar para a bandeja", "Вийти":"Sair", "Конфіг":"Configuração", "Помилка":"Erro", "Файл не знайдено: ":"Arquivo não encontrado: ", "Не вдалося відкрити камеру. Перевір дозвіл Windows або вибери іншу камеру.":"Não foi possível abrir a câmera. Verifique as permissões do Windows ou selecione outra câmera.", "Не вдалося запустити віртуальну камеру Streamer Camera Control. Запусти INSTALL.bat від імені адміністратора або перевстанови драйвер. Деталі: ":"Não foi possível iniciar a câmera virtual Streamer Camera Control. Execute INSTALL.bat como administrador ou reinstale o driver. Detalhes: ", "Камеру зупинено":"Câmera parada", "Завершення роботи камери…":"Finalizando a câmera…", "Зачекай завершення зупинки камери…":"Aguarde a câmera terminar de parar…"
+            "ПОШУК РУКИ…":"PROCURANDO MÃO…", "ЗНАЙДЕНО РУК: ":"MÃOS DETECTADAS: ", "ОЧІКУВАННЯ":"AGUARDANDO", "НЕАКТИВНО":"INATIVO", "● НЕАКТИВНО":"● INATIVO", "● ПРАЦЮЄ":"● EM EXECUÇÃO", "КАМЕРУ ЗУПИНЕНО":"CÂMERA PARADA", "ЗАВАНТАЖЕННЯ МОДЕЛІ…":"CARREGANDO MODELO…", "ПОМИЛКА ІНІЦІАЛІЗАЦІЇ":"ERRO DE INICIALIZAÇÃO", "ПОМИЛКА ОБРОБКИ КАДРУ:":"ERRO AO PROCESSAR QUADRO:", "ОБЛИЧЧЯ НЕ ВИЯВЛЕНО — ОЧІКУЮ":"ROSTO NÃO DETECTADO — AGUARDANDO", "Обличчя не виявлено — очікую":"Rosto não detectado — aguardando", "ОБЛИЧЧЯ:":"ROSTOS:", " · ЖЕСТИ АКТИВНІ":" · GESTOS ATIVOS", "ЛІВА":"ESQUERDA", "ПРАВА":"DIREITA", "Запущено скрипт: ":"Script iniciado: ", "Помилка виконання прив'язки: ":"Erro ao executar atribuição: ", "Помилка налаштування детекції обличчя: ":"Erro ao configurar a detecção facial: ", "Зупинити камеру":"Parar câmera", "Відкрити":"Abrir", "Згорнути в трей":"Minimizar para a bandeja", "Вийти":"Sair", "Конфіг":"Configuração", "Помилка":"Erro", "Файл не знайдено: ":"Arquivo não encontrado: ", "Не вдалося відкрити камеру. Перевір дозвіл Windows або вибери іншу камеру.":"Não foi possível abrir a câmera. Verifique as permissões do Windows ou selecione outra câmera.", "Не вдалося запустити віртуальну камеру Streamer Camera Control. Запусти INSTALL.bat від імені адміністратора або перевстанови драйвер. Деталі: ":"Não foi possível iniciar a câmera virtual Streamer Camera Control. Execute INSTALL.bat como administrador ou reinstale o driver. Detalhes: ", "Камеру зупинено":"Câmera parada", "Завершення роботи камери…":"Finalizando a câmera…", "Зачекай завершення зупинки камери…":"Aguarde a câmera terminar de parar…",
+            "● ПОМИЛКА": "● ERRO",
+            "Автозапуск": "Inicialização automática",
+            "Камеру зупинено через помилку, щоб уникнути зависання.": "A câmera foi parada devido a um erro para evitar travamentos.",
+            ". Перевір інтернет-з'єднання. Деталі: ": " . Verifique a conexão com a Internet. Detalhes: ",
+            "ОБИДВІ РУКИ": "AMBAS AS MÃOS",
+            "ЗБЕРЕГТИ НАЛАШТУВАННЯ": "SALVAR CONFIGURAÇÕES",
+            "Виявляти обличчя та показувати рамки": "Detectar rostos e mostrar molduras",
+            "ДОДАТИ СКРИПТ": "ADICIONAR SCRIPT",
+            "Не вдалося запустити": "Não foi possível iniciar",
+            "Підтримуються AHK, EXE, BAT, CMD": "Compatível com AHK, EXE, BAT e CMD",
+            "Спочатку вибери скрипт зі списку.": "Primeiro, selecione um script na lista.",
+            "Збереження…": "Salvando…",
+            "ПОМИЛКА": "ERRO",
+            "Запуск AHK/BAT доступний у Windows.": "A execução de AHK/BAT está disponível no Windows.",
+            "НЕМАЄ КАДРУ З КАМЕРИ": "SEM IMAGEM DA CÂMERA",
+            "1920 × 1080 (Full HD)": "1920 × 1080 (Full HD)",
+            "Не вдалося скопіювати конфігурацію: ": "Não foi possível copiar a configuração: ",
+            "Завантаження моделі…": "Carregando modelo…",
+            "ЛІВА РУКА": "MÃO ESQUERDA",
+            "Знайдено рук: ": "Mãos detectadas: ",
+            "Зберегти налаштування": "Salvar configurações",
+            "Focus here, then press up to 3 keys": "Clique aqui e pressione até 3 teclas",
+            "Є незбережені зміни…": "Há alterações não salvas…",
+            "Не вдалося відкрити посилання у браузері за замовчуванням.": "Não foi possível abrir o link no navegador padrão.",
+            "Не вдалося завантажити модель ": "Não foi possível baixar o modelo ",
+            "ПРАВА РУКА": "MÃO DIREITA",
+            "Формат не підтримується": "Formato não suportado",
+            "✓ Прив’язки автоматично збережено": "✓ As atribuições foram salvas automaticamente",
+            "Помилка автозбереження: ": "Erro ao salvar automaticamente: ",
+            "Помилка запуску камери": "Erro ao iniciar a câmera",
+            " байт). Перевір інтернет-з'єднання або доступ до storage.googleapis.com.": " bytes). Verifique a conexão com a Internet ou o acesso a storage.googleapis.com.",
+            "Пропущено файли: ": "Arquivos ignorados: ",
+            "Не вдалося змінити автозапуск: ": "Não foi possível alterar a inicialização automática: ",
+            "Дозволені лише .ahk, .exe, .bat та .cmd": "Somente .ahk, .exe, .bat e .cmd são permitidos",
+            "Обличчя": "Rosto",
+            "Скрипт: ": "Script: ",
+            "Утримання (с)": "Duração (s)",
+            "Оброблене відео надсилається у віртуальну камеру Streamer Camera Control. У OBS та Discord вибери цей пристрій; фізичну камеру використовує ця програма.": "O vídeo processado é enviado para a câmera virtual Streamer Camera Control. Selecione este dispositivo no OBS e no Discord; o aplicativo usa a câmera física.",
+            "Клавіша / текст / URL": "Tecla / texto / URL",
+            "ПОМИЛКА ОБРОБКИ КАДРУ: ": "ERRO AO PROCESSAR QUADRO: ",
+            " → виконано: ": " → executado: ",
+            "ЖЕСТИ АКТИВНІ": "GESTOS ATIVOS",
+            "Конфігурацію скопійовано в буфер обміну.": "Configuração copiada para a área de transferência.",
+            "Прив’язки зберігаються автоматично": "As atribuições são salvas automaticamente",
         }
         # Complete the Czech UI for controls and runtime status messages.
         translations["cs"].update({
@@ -822,7 +916,6 @@ class Main(QMainWindow):
                     self.virtual_camera_size = (width, height)
                     self.virtual_frames_sent = 0
                     self.virtual_cam = pyvirtualcam.Camera(width=width, height=height, fps=30, fmt=pyvirtualcam.PixelFormat.RGB, device="Streamer Camera Control", backend="unitycapture")
-                    self.event.setText(f"Virtual camera ({self.virtual_cam.backend}): {self.virtual_cam.device} · {width}×{height} RGB")
                 except Exception as vc_error:
                     raise RuntimeError(self.tr("Не вдалося запустити віртуальну камеру Streamer Camera Control. Запусти INSTALL.bat від імені адміністратора або перевстанови драйвер. Деталі: ") + str(vc_error))
             self.face_history.clear(); self.last_hand_overlay=None; self.active=True; self.start.setText(self.tr("■  ЗУПИНИТИ КАМЕРУ")); self.status.setText(self.tr("● ПРАЦЮЄ")); self.status.setStyleSheet("color:#63f2b2;font-weight:700"); self.timer.start(33 if self.virtual_cam is not None else 25)
@@ -972,17 +1065,9 @@ class Main(QMainWindow):
             rgb_frame = cv2.resize(rgb_frame, (out_w, out_h), interpolation=cv2.INTER_AREA)
         # pyvirtualcam expects H×W×3 uint8 RGB; make the buffer contiguous explicitly.
         rgb_frame = np.ascontiguousarray(rgb_frame, dtype=np.uint8)
-        # Unity Capture needs a paced frame producer. send() transfers the RGB
-        # buffer; sleep_until_next_frame() keeps the stream alive at the device FPS
-        # instead of letting the UI timer overrun the capture filter.
         self.virtual_cam.send(rgb_frame)
         self.virtual_cam.sleep_until_next_frame()
         self.virtual_frames_sent += 1
-        if self.virtual_frames_sent == 1 or self.virtual_frames_sent % 30 == 0:
-            self.event.setText(
-                f"Virtual camera ({self.virtual_cam.backend}): "
-                f"{self.virtual_cam.device} · {self.virtual_frames_sent} frames sent"
-            )
 
     def process_detected(self,detected):
         """Виконує прив'язку лише після стабільного жесту; одна дія на одне утримання."""

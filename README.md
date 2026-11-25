@@ -11,7 +11,7 @@ A Windows application for controlling your computer via gestures using a webcam.
 ## Installation and Launch
 
 1. Download and extract the archive into a folder.
-2. Run `INSTALL.bat` and wait for the setup to complete (1–2 minutes) and at the end of the installation, grant permission to create a virtual camera.
+2. Run `INSTALL.bat` and wait for the setup to complete (1–2 minutes).
 3. Launch the application using `START.vbs`.
 
 ## Custom Scripts
