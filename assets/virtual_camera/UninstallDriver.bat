@@ -8,5 +8,5 @@ if errorlevel 1 (
 )
 "%SystemRoot%\SysWOW64\regsvr32.exe" /s /u "%~dp0UnityCaptureFilter32.dll"
 "%SystemRoot%\System32\regsvr32.exe" /s /u "%~dp0UnityCaptureFilter64.dll"
-echo StrimerCameraControl virtual camera has been unregistered.
+echo Streamer Camera Control virtual camera has been unregistered.
 pause
